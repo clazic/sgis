@@ -18,6 +18,7 @@ type Options struct {
 	OutFile string   // "" = stdout; otherwise write to this file path
 	Title   string   // optional, used as xlsx sheet name
 	Fields  []string // optional column projection (empty = all)
+	WGS84   bool     // geojson only: reproject EPSG:5179 (UTM-K) coords to WGS84
 }
 
 // FormatList returns the list of valid format names.
