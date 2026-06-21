@@ -66,8 +66,42 @@ func buildSubCmd(parent *cobra.Command, ep *api.Endpoint) *cobra.Command {
 		}
 		sub.Flags().String(flagName, "", desc)
 	}
+	registerParamFlag(sub)
 
 	return sub
+}
+
+// registerParamFlag adds the universal --param key=value passthrough flag,
+// allowing arbitrary query parameters on any endpoint (including those with
+// no predefined Params). Keys are sent verbatim as SGIS query keys.
+func registerParamFlag(sub *cobra.Command) {
+	sub.Flags().StringArray("param", nil, "임의 쿼리 파라미터 (key=value, 복수 지정 가능)")
+}
+
+// mergeExtraParams parses --param entries and merges them into params.
+// A defined-flag key already present in params is rejected to avoid ambiguity;
+// undefined keys are added as-is. The value may itself contain '=' (split once).
+func mergeExtraParams(cmd *cobra.Command, params map[string]string) error {
+	extra, err := cmd.Flags().GetStringArray("param")
+	if err != nil {
+		return nil // flag not registered on this command — nothing to merge
+	}
+	for _, item := range extra {
+		idx := strings.Index(item, "=")
+		if idx < 0 {
+			return fmt.Errorf("--param 형식 오류: key=value 여야 합니다: %q", item)
+		}
+		key := strings.TrimSpace(item[:idx])
+		val := strings.TrimSpace(item[idx+1:])
+		if key == "" {
+			return fmt.Errorf("--param 키가 비어있습니다: %q", item)
+		}
+		if _, exists := params[key]; exists {
+			return fmt.Errorf("--param '%s'는 이미 --%s 플래그로 지정됨", key, strings.ReplaceAll(key, "_", "-"))
+		}
+		params[key] = val
+	}
+	return nil
 }
 
 // buildLongDesc constructs a long description listing all parameters.
@@ -113,6 +147,11 @@ func makeRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) error {
 			} else if p.Required {
 				missing = append(missing, "--"+flagName)
 			}
+		}
+
+		// Merge universal --param passthrough entries
+		if err := mergeExtraParams(cmd, params); err != nil {
+			return err
 		}
 
 		// Validate required params

@@ -56,6 +56,7 @@ func newBoundaryCmd() *cobra.Command {
 			}
 			sub.Flags().String(flagName, "", desc)
 		}
+		registerParamFlag(sub)
 		parent.AddCommand(sub)
 	}
 
@@ -83,6 +84,9 @@ func makeBoundaryRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) 
 			} else if p.Required {
 				missing = append(missing, "--"+flagName)
 			}
+		}
+		if err := mergeExtraParams(cmd, params); err != nil {
+			return err
 		}
 		if len(missing) > 0 {
 			return fmt.Errorf("필수 파라미터가 없습니다: %s", strings.Join(missing, ", "))

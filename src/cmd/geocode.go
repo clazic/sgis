@@ -45,6 +45,7 @@ func newGeocodeCmd() *cobra.Command {
 			}
 			sub.Flags().String(flagName, "", desc)
 		}
+		registerParamFlag(sub)
 		parent.AddCommand(sub)
 	}
 
