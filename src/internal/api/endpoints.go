@@ -691,6 +691,26 @@ var Registry = []Endpoint{
 			{Name: "class_code", Required: false, Description: "상위 분류코드"},
 		},
 	},
+
+	// ── search — 검색(연관어/SOP) ──────────────────────────────────────────────
+	{
+		Group: "search", Name: "relword", Method: "GET",
+		Path:        "search/relword.json",
+		Description: "연관어검색 (검색어→유의어)",
+		Params: []Param{
+			{Name: "searchword", Required: true, Description: "검색어"},
+		},
+	},
+	{
+		Group: "search", Name: "sop", Method: "GET",
+		Path:        "search/sop.json",
+		Description: "SOP검색 (검색어→통계 SOP 정보)",
+		Params: []Param{
+			{Name: "searchword", Required: true, Description: "검색어"},
+			{Name: "pagenum", Required: false, Description: "검색페이지 (default 0)"},
+			{Name: "resultcount", Required: false, Description: "페이지당 결과 수 (1~50, default 5)"},
+		},
+	},
 }
 
 // EndpointsByGroup은 지정 그룹의 엔드포인트 슬라이스를 반환합니다.

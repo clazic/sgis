@@ -20,7 +20,7 @@
 | `geocode` (지오코딩/좌표) | `/OpenAPI3/addr/geocode*.json`, `/addr/rgeocode*.json`, `/transformation/transcoord.json` | 주소→좌표, 좌표→주소, 좌표변환 |
 | `code` (행정구역코드) | `/OpenAPI3/addr/stage.json`, `/personal/findcodeinsmallarea.json`, `/year/data.json`, `/stats/industrycode.json` | 시도/시군구/읍면동 코드, 소지역코드, 기준연도, 산업분류 |
 
-전체 엔드포인트: **약 85개** (15개 문서 페이지). 그룹별 개수는 본 문서 끝 "## 엔드포인트 개수 요약" 참조.
+전체 엔드포인트: **약 87개** (16개 문서 페이지). 그룹별 개수는 본 문서 끝 "## 엔드포인트 개수 요약" 참조.
 
 ---
 
@@ -128,6 +128,21 @@ GET .../OpenAPI3/stats/population.json?accessToken=<TOKEN>&year=2020&adm_cd=11&l
 **householdmember.json:** `adm_cd, adm_nm, population`.
 
 샘플(실측, 서울 2020 인구): `tot_ppltn=9586195, tot_family=3982290, avg_age=42.4, ppltn_dnsty=15837.1`.
+
+---
+
+## search — 검색 (`/OpenAPI3/search/*`) — search.html
+
+| API 이름 | Method | 엔드포인트 | 필수 파라미터 | 주요 선택 파라미터 |
+|---|---|---|---|---|
+| 연관어검색 | GET | `/OpenAPI3/search/relword.json` | accessToken, searchword | — |
+| SOP검색 | GET | `/OpenAPI3/search/sop.json` | accessToken, searchword | pagenum(default 0), resultcount(1~50, default 5) |
+
+**relword.json 응답:** `rel_search_word`(유의어 리스트). (API_0501)
+**sop.json 응답:** `totalcount, pagenum, returncount, resultData[]{stat_id, data_base_year, nm, url}`. (API_0502)
+
+> SGIS 공식 메뉴에서 '검색'은 센서스와 별개 그룹이며 하위에 연관어검색·SOP검색 2개가 있다.
+> CLI에서는 `sgis search relword` / `sgis search sop` 로 제공한다.
 
 ---
 
@@ -291,5 +306,6 @@ GET .../OpenAPI3/stats/population.json?accessToken=<TOKEN>&year=2020&adm_cd=11&l
 | data (통계 전체) | 약 60 | stats 10 + themamap 8 + jibang 12 + urban 8(경계 제외) + startupbiz 14 + technicalbiz 3 + lastname 2 + statscommunity 1 + ndsm 10 + figure(json) 3 |
 | boundary (경계 GeoJSON) | 8 | hadmarea, statsarea, userarea, urban/boundary, grid/data, figure 3종 |
 | geocode (지오코딩/좌표) | 5 | geocode, geocodewgs84, rgeocode, rgeocodewgs84, transcoord |
+| search (검색) | 2 | search/relword, search/sop |
 | code (코드/연도) | 4 | addr/stage, personal/findcodeinsmallarea, year/data, stats/industrycode(공유) |
-| **합계** | **약 79~85** | 일부 엔드포인트는 그룹 간 공유(urban=data+boundary, industrycode=data+code) |
+| **합계** | **약 81~87** | 일부 엔드포인트는 그룹 간 공유(urban=data+boundary, industrycode=data+code) |
