@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact: sgis-linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            artifact: sgis-linux-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            artifact: sgis-darwin-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            artifact: sgis-darwin-amd64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact: sgis-windows-amd64.exe
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+
+      # CGO_ENABLED=0 guard — sgis has no sqlite/CGO dependency.
+      # This step catches any accidental CGO import before it reaches release.
+      - name: CGO=0 guard
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...
+
+      - name: Build
+        working-directory: src
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: go build -ldflags "-s -w -X main.version=${{ github.ref_name }}" -o ${{ matrix.artifact }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: src/${{ matrix.artifact }}
+
+  skill-package:
+    runs-on: ubuntu-latest
+    name: Package skill files
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package skill tarball
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ASSET="sgis-skill-${VERSION}.tar.gz"
+          # VERSION 파일 갱신
+          echo "$VERSION" > VERSION
+          # 화이트리스트 기반 패키징
+          # 포함: SKILL.md LEARNINGS.md VERSION references templates scripts
+          # 제외: src/ (Go 소스), .github/, 숨김폴더, 바이너리, apps/ (플랫폼 바이너리)
+          tar -czf "$ASSET" \
+            --exclude=".DS_Store" \
+            SKILL.md LEARNINGS.md VERSION references templates scripts
+          echo "SKILL_ASSET=$ASSET" >> $GITHUB_ENV
+
+      - name: Upload skill artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-package
+          path: sgis-skill-*.tar.gz
+
+  release:
+    needs: [build, skill-package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          find . -type f | sort | xargs sha256sum | sed 's|./[^/]*/||' > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*
+            artifacts/SHA256SUMS
+          generate_release_notes: true

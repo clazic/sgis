@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    name: Lint, Build, Test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: src/go.mod
+
+      - name: go vet
+        working-directory: src
+        run: go vet ./...
+
+      - name: gofmt check
+        working-directory: src
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: CGO=0 guard (build)
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: go build ./...
+
+      - name: Test
+        working-directory: src
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
