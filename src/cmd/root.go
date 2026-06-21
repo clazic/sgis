@@ -22,7 +22,7 @@ SGIS(통계지리정보서비스) Open API 기반 CLI 도구입니다.
   boundary  행정구역 경계 조회 (GeoJSON 출력 지원)
   geocode   주소→좌표 변환 및 좌표계 변환
   code      행정구역 코드 조회 (시도/시군구)
-  config    설정 관리 (Consumer Key/Secret)
+  config    설정 관리 (서비스 ID/보안 Key)
   update    CLI 업데이트
 
 플래그:
@@ -30,8 +30,8 @@ SGIS(통계지리정보서비스) Open API 기반 CLI 도구입니다.
   -h, --help      도움말
 
 시작하기:
-  # 1. Consumer Key/Secret 설정 (https://sgis.kostat.go.kr/developer/ 에서 발급)
-  sgis config set-credential <CONSUMER_KEY> <CONSUMER_SECRET>
+  # 1. 서비스 ID/보안 Key 설정 (https://sgis.kostat.go.kr/developer/ 에서 발급)
+  sgis config set-credential <서비스 ID> <보안 Key>
 
   # 2. 인구 통계 조회
   sgis data population --adm-cd 11 --year 2020

@@ -96,18 +96,18 @@ func GetCredentials() (key, secret string, err error) {
 		return "", "", err
 	}
 	if cfg.ConsumerKey == "" || cfg.ConsumerSecret == "" {
-		return "", "", fmt.Errorf("Consumer Key/Secret이 설정되지 않았습니다\n%s", NoCredentialMessage())
+		return "", "", fmt.Errorf("서비스 ID/보안 Key가 설정되지 않았습니다\n%s", NoCredentialMessage())
 	}
 	return cfg.ConsumerKey, cfg.ConsumerSecret, nil
 }
 
-// SetCredentials는 Consumer Key와 Secret을 config.yaml에 저장합니다 (0o600).
+// SetCredentials는 서비스 ID와 보안 Key를 config.yaml에 저장합니다 (0o600).
 func SetCredentials(key, secret string) error {
 	if key == "" {
-		return fmt.Errorf("Consumer Key는 비워둘 수 없습니다")
+		return fmt.Errorf("서비스 ID는 비워둘 수 없습니다")
 	}
 	if secret == "" {
-		return fmt.Errorf("Consumer Secret은 비워둘 수 없습니다")
+		return fmt.Errorf("보안 Key는 비워둘 수 없습니다")
 	}
 
 	// 기존 설정 로드 (다른 필드 보존)
@@ -144,7 +144,7 @@ func SetCredentials(key, secret string) error {
 	return nil
 }
 
-// HasCredentials는 Consumer Key와 Secret이 모두 설정되어 있는지 확인합니다.
+// HasCredentials는 서비스 ID와 보안 Key가 모두 설정되어 있는지 확인합니다.
 func HasCredentials() bool {
 	if os.Getenv("SGIS_CONSUMER_KEY") != "" && os.Getenv("SGIS_CONSUMER_SECRET") != "" {
 		return true
@@ -158,7 +158,7 @@ func HasCredentials() bool {
 
 // NoCredentialMessage는 자격증명이 없을 때 표시할 안내 메시지를 반환합니다.
 func NoCredentialMessage() string {
-	return `Consumer Key/Secret이 설정되지 않았습니다.
+	return `서비스 ID/보안 Key가 설정되지 않았습니다.
 
 설정 방법:
 
@@ -167,9 +167,9 @@ func NoCredentialMessage() string {
    export SGIS_CONSUMER_SECRET="your_consumer_secret"
 
 2. 명령어로 설정:
-   sgis config set-credential <CONSUMER_KEY> <CONSUMER_SECRET>
+   sgis config set-credential <서비스 ID> <보안 Key>
 
-Consumer Key/Secret은 SGIS 개발자 포털에서 발급받을 수 있습니다.
+서비스 ID/보안 Key는 SGIS 개발자 포털에서 발급받을 수 있습니다.
 https://sgis.kostat.go.kr/developer/html/newOpenApi/api/develop/apiUsageApp.html
 `
 }
