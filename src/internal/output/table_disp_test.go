@@ -16,8 +16,8 @@ func TestDispWidth(t *testing.T) {
 		want int
 	}{
 		{"abc", 3},
-		{"가나", 4},     // 2 fullwidth = 4 columns
-		{"가b다", 5},    // 2+1+2
+		{"가나", 4},  // 2 fullwidth = 4 columns
+		{"가b다", 5}, // 2+1+2
 		{"", 0},
 		{"서울특별시", 10}, // 5 Hangul = 10 columns
 	}
@@ -86,4 +86,3 @@ func TestRenderTable_HangulAlignment(t *testing.T) {
 		}
 	}
 }
-

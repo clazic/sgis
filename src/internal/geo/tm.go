@@ -18,10 +18,10 @@ const (
 	grs80A   = 6378137.0           // semi-major axis (m)
 	grs80F   = 1.0 / 298.257222101 // flattening
 	tmK0     = 0.9996              // scale factor at central meridian
-	tmLon0   = 127.5              // central meridian (degrees E)
-	tmLat0   = 38.0              // latitude of origin (degrees N)
-	tmFalseE = 1000000.0          // false easting (m)
-	tmFalseN = 2000000.0          // false northing (m)
+	tmLon0   = 127.5               // central meridian (degrees E)
+	tmLat0   = 38.0                // latitude of origin (degrees N)
+	tmFalseE = 1000000.0           // false easting (m)
+	tmFalseN = 2000000.0           // false northing (m)
 
 	deg2rad = math.Pi / 180.0
 	rad2deg = 180.0 / math.Pi
