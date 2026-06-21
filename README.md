@@ -6,7 +6,7 @@ SGIS(통계지리정보서비스) Open API CLI 도구 — 행정구역 경계·�
 sgis code stage                                        # 시도 코드 목록
 sgis data population --adm-cd 11 --year 2020           # 서울 인구통계
 sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson  # 서울 경계 GeoJSON
-sgis geocode address "서울특별시 종로구 청와대로 1"      # 주소 → 좌표
+sgis geocode geocode --address "서울특별시 종로구 청와대로 1"  # 주소 → 좌표
 ```
 
 ---
@@ -65,12 +65,12 @@ irm https://raw.githubusercontent.com/clazic/sgis/master/scripts/install.ps1 | i
 
 ## 자격증명 설정
 
-SGIS Open API consumerKey / consumerSecret이 필요합니다.  
+SGIS Open API **서비스 ID**(consumerKey) / **보안 Key**(consumerSecret)가 필요합니다.  
 [https://sgis.mods.go.kr/developer/html/newOpenApi/guide/guide/getApiKey.html](https://sgis.mods.go.kr/developer/html/newOpenApi/guide/guide/getApiKey.html) 에서 무료 발급.
 
 ```bash
 # 직접 입력
-sgis config set-credential <CONSUMER_KEY> <CONSUMER_SECRET>
+sgis config set-credential <서비스 ID> <보안 Key>
 
 # 환경변수 (CI/서버 환경)
 export SGIS_CONSUMER_KEY="<KEY>"         # macOS/Linux
@@ -102,8 +102,8 @@ sgis data population --adm-cd 31 --year 2023 --low-search 1   # 경기도 시군
 sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson -o seoul.geojson
 
 # 지오코딩
-sgis geocode address "부산광역시 해운대구 우동 1413"
-sgis geocode address-wgs84 "서울특별시 중구 태평로1가 31"   # WGS84 좌표
+sgis geocode geocode --address "부산광역시 해운대구 우동 1413"
+sgis geocode geocodewgs84 --address "서울특별시 중구 태평로1가 31"   # WGS84 좌표
 
 # 업데이트 확인
 sgis update --check
@@ -127,13 +127,18 @@ sgis update --check
 | **boundary** | `sgis boundary hadmarea` | 행정구역 경계 GeoJSON |
 | | `sgis boundary statsarea` | 집계구 경계 GeoJSON |
 | | `sgis boundary userarea` | 영역내 경계 GeoJSON |
-| | `sgis boundary urbanboundary` | 도시권 경계 GeoJSON |
-| | `sgis boundary grid` | 격자 경계 GeoJSON |
-| **geocode** | `sgis geocode address` | 주소 → 좌표 (UTM-K) |
-| | `sgis geocode address-wgs84` | 주소 → 좌표 (WGS84) |
-| | `sgis geocode reverse` | 좌표 → 주소 (UTM-K 입력) |
-| | `sgis geocode reverse-wgs84` | 좌표 → 주소 (WGS84 입력) |
-| | `sgis geocode transform` | 좌표계 변환 |
+| | `sgis boundary urban-boundary` | 도시/준도시 경계 GeoJSON |
+| | `sgis boundary grid-data` | 격자 경계 GeoJSON |
+| | `sgis boundary figure-buildingarea` | 전개도 건물경계 GeoJSON |
+| | `sgis boundary figure-floorboundary` | 층별 최외각 공간속성 |
+| | `sgis boundary figure-floorcompany` | 층별 사업체 공간속성 |
+| **geocode** | `sgis geocode geocode` | 주소 → 좌표 (UTM-K) |
+| | `sgis geocode geocodewgs84` | 주소 → 좌표 (WGS84) |
+| | `sgis geocode rgeocode` | 좌표 → 주소 (UTM-K 입력) |
+| | `sgis geocode rgeocodewgs84` | 좌표 → 주소 (WGS84 입력) |
+| | `sgis geocode transcoord` | 좌표계 변환 |
+| **search** | `sgis search relword` | 연관어검색 (검색어→유의어) |
+| | `sgis search sop` | SOP검색 (검색어→통계 SOP) |
 | **code** | `sgis code stage` | 시도/시군구/읍면동 코드 |
 | | `sgis code year-data` | 가용 기준연도 목록 |
 | | `sgis code industrycode` | 산업분류 코드 |
@@ -151,7 +156,21 @@ sgis data population --adm-cd 11 --year 2020 --format json     # JSON
 sgis data population --adm-cd 11 --year 2020 --format csv      # CSV
 sgis data population --adm-cd 11 --year 2020 --format xlsx -o data.xlsx  # Excel
 sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson           # GeoJSON
+sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson --wgs84   # WGS84 재투영(Leaflet 등)
 ```
+
+---
+
+## 공통 옵션
+
+모든 조회 명령에서 사용 가능:
+
+- `--param key=value` — 도움말에 정의되지 않은 SGIS API 파라미터를 직접 전달(복수 지정 가능).
+  예: `sgis geocode rgeocode --x-coor 953932 --y-coor 1952053 --param addr_type=21`
+- `--format table|json|csv|geojson|xlsx`, `-o <파일>` — 출력 형식 및 파일 저장
+
+**boundary 전용:**
+- `--wgs84` — 좌표를 UTM-K(EPSG:5179)에서 WGS84(EPSG:4326)로 재투영. Leaflet 등 웹지도에 바로 사용 가능.
 
 ---
 
