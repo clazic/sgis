@@ -73,10 +73,10 @@ SGIS Open API **서비스 ID**(consumerKey) / **보안 Key**(consumerSecret)가 
 sgis config set-credential <서비스 ID> <보안 Key>
 
 # 환경변수 (CI/서버 환경)
-export SGIS_CONSUMER_KEY="<KEY>"         # macOS/Linux
-export SGIS_CONSUMER_SECRET="<SECRET>"
-$env:SGIS_CONSUMER_KEY = "<KEY>"         # Windows PowerShell
-$env:SGIS_CONSUMER_SECRET = "<SECRET>"
+export SGIS_CONSUMER_KEY="<서비스 ID>"         # macOS/Linux
+export SGIS_CONSUMER_SECRET="<보안 Key>"
+$env:SGIS_CONSUMER_KEY = "<서비스 ID>"         # Windows PowerShell
+$env:SGIS_CONSUMER_SECRET = "<보안 Key>"
 
 # 설정 확인
 sgis config get
