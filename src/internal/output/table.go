@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"golang.org/x/text/width"
 )
 
 // renderTable renders result as an aligned text table.
@@ -53,14 +55,14 @@ func renderArrayTable(rows []map[string]interface{}, fields []string, f interfac
 		return nil
 	}
 
-	// Calculate column widths (header width vs max data width)
+	// Calculate column widths (header width vs max data width, display-width based)
 	widths := make([]int, len(cols))
 	for i, c := range cols {
-		widths[i] = len(c)
+		widths[i] = dispWidth(c)
 	}
 	for _, row := range rows {
 		for i, c := range cols {
-			if l := len(formatValue(row[c])); l > widths[i] {
+			if l := dispWidth(formatValue(row[c])); l > widths[i] {
 				widths[i] = l
 			}
 		}
@@ -82,7 +84,7 @@ func renderArrayTable(rows []map[string]interface{}, fields []string, f interfac
 	// Header row
 	buf.WriteString("│")
 	for i, c := range cols {
-		buf.WriteString(fmt.Sprintf(" %-*s │", widths[i], truncate(c, widths[i])))
+		buf.WriteString(" " + padRight(truncate(c, widths[i]), widths[i]) + " │")
 	}
 	buf.WriteByte('\n')
 
@@ -95,7 +97,7 @@ func renderArrayTable(rows []map[string]interface{}, fields []string, f interfac
 		buf.WriteString("│")
 		for i, c := range cols {
 			val := truncate(formatValue(row[c]), widths[i])
-			buf.WriteString(fmt.Sprintf(" %-*s │", widths[i], val))
+			buf.WriteString(" " + padRight(val, widths[i]) + " │")
 		}
 		buf.WriteByte('\n')
 	}
@@ -115,13 +117,13 @@ func renderKeyValueTable(obj map[string]interface{}, fields []string, f interfac
 		return nil
 	}
 
-	keyW := len("키")
-	valW := len("값")
+	keyW := dispWidth("키")
+	valW := dispWidth("값")
 	for _, k := range keys {
-		if l := len(k); l > keyW {
+		if l := dispWidth(k); l > keyW {
 			keyW = l
 		}
-		if l := len(formatValue(obj[k])); l > valW {
+		if l := dispWidth(formatValue(obj[k])); l > valW {
 			valW = l
 		}
 	}
@@ -137,14 +139,14 @@ func renderKeyValueTable(obj map[string]interface{}, fields []string, f interfac
 
 	buf.WriteString(buildSeparator(widths))
 	buf.WriteByte('\n')
-	buf.WriteString(fmt.Sprintf("│ %-*s │ %-*s │\n", keyW, "키", valW, "값"))
+	buf.WriteString("│ " + padRight("키", keyW) + " │ " + padRight("값", valW) + " │\n")
 	buf.WriteString(buildMidSeparator(widths))
 	buf.WriteByte('\n')
 
 	for _, k := range keys {
 		kStr := truncate(k, keyW)
 		vStr := truncate(formatValue(obj[k]), valW)
-		buf.WriteString(fmt.Sprintf("│ %-*s │ %-*s │\n", keyW, kStr, valW, vStr))
+		buf.WriteString("│ " + padRight(kStr, keyW) + " │ " + padRight(vStr, valW) + " │\n")
 	}
 
 	buf.WriteString(buildBottomSeparator(widths))
@@ -210,13 +212,68 @@ func buildBottomSeparator(widths []int) string {
 	return b.String()
 }
 
-// truncate clips s to maxLen bytes (ASCII-safe; SGIS keys are ASCII).
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+// runeWidth returns the terminal display width of a single rune:
+// 2 for East Asian wide/fullwidth (e.g. Hangul, CJK), 1 otherwise.
+func runeWidth(r rune) int {
+	switch width.LookupRune(r).Kind() {
+	case width.EastAsianWide, width.EastAsianFullwidth:
+		return 2
+	default:
+		return 1
+	}
+}
+
+// dispWidth returns the total terminal display width of s, accounting for
+// East Asian fullwidth characters (counted as 2 columns each).
+func dispWidth(s string) int {
+	w := 0
+	for _, r := range s {
+		w += runeWidth(r)
+	}
+	return w
+}
+
+// padRight pads s with spaces on the right so its display width equals width.
+// Replaces fmt's %-*s, which pads by byte count and misaligns fullwidth text.
+func padRight(s string, w int) string {
+	pad := w - dispWidth(s)
+	if pad < 0 {
+		pad = 0
+	}
+	return s + strings.Repeat(" ", pad)
+}
+
+// truncate clips s so its display width does not exceed maxWidth, appending
+// ".." (width 2) when clipped. Operates on runes so multibyte characters are
+// never split mid-byte.
+func truncate(s string, maxWidth int) string {
+	if dispWidth(s) <= maxWidth {
 		return s
 	}
-	if maxLen <= 2 {
-		return s[:maxLen]
+	// Not enough room for an ellipsis: fill up to maxWidth by display width.
+	if maxWidth <= 2 {
+		var b strings.Builder
+		w := 0
+		for _, r := range s {
+			rw := runeWidth(r)
+			if w+rw > maxWidth {
+				break
+			}
+			b.WriteRune(r)
+			w += rw
+		}
+		return b.String()
 	}
-	return s[:maxLen-2] + ".."
+	limit := maxWidth - 2 // reserve 2 columns for ".."
+	var b strings.Builder
+	w := 0
+	for _, r := range s {
+		rw := runeWidth(r)
+		if w+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		w += rw
+	}
+	return b.String() + ".."
 }

@@ -23,7 +23,7 @@ func newGeocodeCmd() *cobra.Command {
   sgis geocode geocode --address "서울특별시 종로구"
   sgis geocode geocodewgs84 --address "부산광역시 해운대구"
   sgis geocode rgeocode --x-coor 953932 --y-coor 1952053
-  sgis geocode transcoord --src 5179 --dst 4326 --pos-x 953932 --pos-y 1952053`,
+  sgis geocode transcoord --src 5179 --dst 4326 --posX 953932 --posY 1952053`,
 		Run: func(cmd *cobra.Command, args []string) {
 			_ = cmd.Help()
 		},
@@ -45,6 +45,7 @@ func newGeocodeCmd() *cobra.Command {
 			}
 			sub.Flags().String(flagName, "", desc)
 		}
+		registerParamFlag(sub)
 		parent.AddCommand(sub)
 	}
 

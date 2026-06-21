@@ -10,14 +10,14 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "설정 관리 (Consumer Key/Secret, 출력 형식 등)",
+	Short: "설정 관리 (서비스 ID/보안 Key, 출력 형식 등)",
 	Long: `sgis 설정을 관리합니다.
 
-Consumer Key/Secret은 SGIS 개발자 포털에서 발급받을 수 있습니다.
+서비스 ID/보안 Key는 SGIS 개발자 포털에서 발급받을 수 있습니다.
 https://sgis.kostat.go.kr/developer/html/newOpenApi/api/develop/apiUsageApp.html
 
 하위 명령:
-  set-credential KEY SECRET   Consumer Key/Secret 설정
+  set-credential KEY SECRET   서비스 ID/보안 Key 설정
   get                         현재 설정 확인 (마스킹)
   set-format FORMAT           기본 출력 형식 설정 (table|json|csv|geojson|xlsx)`,
 	Run: func(cmd *cobra.Command, args []string) {
@@ -27,8 +27,8 @@ https://sgis.kostat.go.kr/developer/html/newOpenApi/api/develop/apiUsageApp.html
 
 var configSetCredentialCmd = &cobra.Command{
 	Use:   "set-credential KEY SECRET",
-	Short: "Consumer Key/Secret 설정",
-	Long: `Consumer Key와 Secret을 ~/.sgis/config.yaml에 저장합니다.
+	Short: "서비스 ID/보안 Key 설정",
+	Long: `서비스 ID와 보안 Key를 ~/.sgis/config.yaml에 저장합니다.
 
 설정 파일은 0o600 권한으로 저장되어 소유자만 읽을 수 있습니다.
 환경변수 SGIS_CONSUMER_KEY / SGIS_CONSUMER_SECRET를 사용하면 config.yaml보다 우선합니다.`,
@@ -38,7 +38,7 @@ var configSetCredentialCmd = &cobra.Command{
 		if err := config.SetCredentials(key, secret); err != nil {
 			return fmt.Errorf("자격증명 저장 실패: %w", err)
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), "Consumer Key/Secret이 저장되었습니다.")
+		fmt.Fprintln(cmd.OutOrStdout(), "서비스 ID/보안 Key가 저장되었습니다.")
 		fmt.Fprintln(cmd.OutOrStdout(), "다음 명령으로 확인: sgis config get")
 		return nil
 	},

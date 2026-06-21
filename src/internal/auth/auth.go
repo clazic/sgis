@@ -20,9 +20,9 @@ import (
 
 // 센티넬 에러: 호출자가 에러 종류에 따라 분기할 수 있도록 노출합니다.
 var (
-	// ErrInvalidCredential은 Consumer Key/Secret이 잘못되어 SGIS가 거부한 경우입니다.
+	// ErrInvalidCredential은 서비스 ID/보안 Key가 잘못되어 SGIS가 거부한 경우입니다.
 	// 재시도해도 의미가 없으므로 사용자에게 재발급을 안내해야 합니다.
-	ErrInvalidCredential = errors.New("SGIS 인증 거부: Consumer Key/Secret이 올바르지 않습니다")
+	ErrInvalidCredential = errors.New("SGIS 인증 거부: 서비스 ID/보안 Key가 올바르지 않습니다")
 
 	// ErrNetwork는 네트워크/전송 레벨 오류입니다. 재시도 가능합니다.
 	ErrNetwork = errors.New("SGIS 인증 네트워크 오류")

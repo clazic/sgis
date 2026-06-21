@@ -18,8 +18,8 @@ func newBoundaryCmd() *cobra.Command {
 		Short: "행정구역 경계 조회 (GeoJSON 출력 지원)",
 		Long: `SGIS 행정구역 경계 데이터를 조회합니다.
 
-좌표계: UTM-K (EPSG:5179). Leaflet 지도 사용 시 WGS84 재투영이 필요합니다.
-기본 출력 형식은 geojson입니다.
+좌표계: UTM-K (EPSG:5179). Leaflet 등 웹지도에서 바로 쓰려면 --wgs84 플래그로
+WGS84(EPSG:4326)로 재투영하세요. 기본 출력 형식은 geojson입니다.
 
 하위 명령:
   hadmarea             행정구역경계
@@ -34,6 +34,7 @@ func newBoundaryCmd() *cobra.Command {
 예시:
   sgis boundary hadmarea --year 2024 --adm-cd 11
   sgis boundary hadmarea --year 2024 --adm-cd 11 --format geojson -o seoul.geojson
+  sgis boundary hadmarea --year 2024 --adm-cd 11 --wgs84 -o seoul.geojson
   sgis boundary statsarea --adm-cd 11010530`,
 		Run: func(cmd *cobra.Command, args []string) {
 			_ = cmd.Help()
@@ -56,6 +57,8 @@ func newBoundaryCmd() *cobra.Command {
 			}
 			sub.Flags().String(flagName, "", desc)
 		}
+		registerParamFlag(sub)
+		sub.Flags().Bool("wgs84", false, "좌표를 WGS84(EPSG:4326)로 재투영 (Leaflet 등 웹지도용, geojson 전용)")
 		parent.AddCommand(sub)
 	}
 
@@ -83,6 +86,9 @@ func makeBoundaryRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) 
 			} else if p.Required {
 				missing = append(missing, "--"+flagName)
 			}
+		}
+		if err := mergeExtraParams(cmd, params); err != nil {
+			return err
 		}
 		if len(missing) > 0 {
 			return fmt.Errorf("필수 파라미터가 없습니다: %s", strings.Join(missing, ", "))
@@ -112,10 +118,13 @@ func makeBoundaryRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) 
 			return fmt.Errorf("API 호출 실패: %w", err)
 		}
 
+		wgs84, _ := cmd.Flags().GetBool("wgs84")
+
 		return output.Render(result, output.Options{
 			Format:  format,
 			OutFile: outFile,
 			Title:   ep.Name,
+			WGS84:   wgs84,
 		})
 	}
 }
