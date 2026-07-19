@@ -66,8 +66,12 @@ func runUpdate() error {
 	}
 	fmt.Printf("최신 버전: %s\n", latest)
 
-	if !updateForce && normalizeVer(current) == normalizeVer(latest) {
-		fmt.Println("이미 최신 버전입니다.")
+	if !updateForce && !newerVer(latest, current) {
+		if normalizeVer(current) == normalizeVer(latest) {
+			fmt.Println("이미 최신 버전입니다.")
+		} else {
+			fmt.Printf("설치된 버전(%s)이 최신 릴리스(%s)보다 높습니다. 다운그레이드하려면 --force를 사용하세요.\n", current, latest)
+		}
 		return nil
 	}
 	if updateCheckOnly {
@@ -344,7 +348,7 @@ func startBackgroundUpdateCheck() {
 		}()
 		select {
 		case tag := <-done:
-			if tag != "" && normalizeVer(tag) != normalizeVer(appVersion) {
+			if tag != "" && newerVer(tag, appVersion) {
 				pendingUpdateOnce.Do(func() {
 					pendingUpdateNotice = tag
 				})
@@ -584,4 +588,39 @@ func normalizeVer(v string) string {
 		v = v[:i]
 	}
 	return v
+}
+
+// newerVer remote가 local보다 높은 버전인지 숫자 세그먼트 단위로 비교합니다.
+// 숫자가 아닌 세그먼트(예: "dev")는 0으로 취급 — dev 빌드에는 모든 릴리스가 새 버전.
+func newerVer(remote, local string) bool {
+	r := strings.Split(normalizeVer(remote), ".")
+	l := strings.Split(normalizeVer(local), ".")
+	n := len(r)
+	if len(l) > n {
+		n = len(l)
+	}
+	for i := 0; i < n; i++ {
+		var rv, lv int
+		if i < len(r) {
+			rv = verSegInt(r[i])
+		}
+		if i < len(l) {
+			lv = verSegInt(l[i])
+		}
+		if rv != lv {
+			return rv > lv
+		}
+	}
+	return false
+}
+
+func verSegInt(s string) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return n
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
