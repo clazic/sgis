@@ -59,12 +59,7 @@ func buildSubCmd(parent *cobra.Command, ep *api.Endpoint) *cobra.Command {
 
 	// Register one string flag per parameter.
 	for _, p := range ep.Params {
-		flagName := strings.ReplaceAll(p.Name, "_", "-")
-		desc := p.Description
-		if p.Required {
-			desc = "[필수] " + desc
-		}
-		sub.Flags().String(flagName, "", desc)
+		sub.Flags().String(strings.ReplaceAll(p.Name, "_", "-"), "", flagDesc(&p))
 	}
 	registerParamFlag(sub)
 
@@ -104,10 +99,23 @@ func mergeExtraParams(cmd *cobra.Command, params map[string]string) error {
 	return nil
 }
 
-// buildLongDesc constructs a long description listing all parameters.
+// flagDesc는 플래그 한 줄 설명을 만듭니다 (필수 표시 + 공용 용어집 반영).
+func flagDesc(p *api.Param) string {
+	desc := api.ParamHelp(p.Name, p.Description)
+	if p.Required {
+		return "[필수] " + desc
+	}
+	return desc
+}
+
+// buildLongDesc constructs a long description with detailed help and all parameters.
 func buildLongDesc(ep *api.Endpoint) string {
 	var sb strings.Builder
 	sb.WriteString(ep.Description)
+	if ep.Long != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(ep.Long)
+	}
 	sb.WriteString("\n\n경로: ")
 	sb.WriteString(ep.Path)
 	if len(ep.Params) > 0 {
@@ -118,9 +126,12 @@ func buildLongDesc(ep *api.Endpoint) string {
 				req = "필수"
 			}
 			flagName := strings.ReplaceAll(p.Name, "_", "-")
-			sb.WriteString(fmt.Sprintf("  --%-20s  [%s] %s\n", flagName, req, p.Description))
+			sb.WriteString(fmt.Sprintf("  --%-14s [%s] %s\n", flagName, req, api.ParamHelp(p.Name, p.Description)))
 		}
+	} else {
+		sb.WriteString("\n\n고정 파라미터가 없습니다. 필요한 쿼리 파라미터는 `--param key=value`로 전달하세요.")
 	}
+	sb.WriteString("\n\n출력 형식은 `-f table|json|csv|geojson|xlsx`, 파일 저장은 `-o <경로>`로 지정합니다.")
 	return sb.String()
 }
 

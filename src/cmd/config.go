@@ -14,7 +14,7 @@ var configCmd = &cobra.Command{
 	Long: `sgis 설정을 관리합니다.
 
 서비스 ID/보안 Key는 SGIS 개발자 포털에서 발급받을 수 있습니다.
-https://sgis.kostat.go.kr/developer/html/newOpenApi/api/develop/apiUsageApp.html
+https://sgis.mods.go.kr/developer/html/newOpenApi/guide/guide/getApiKey.html
 
 하위 명령:
   set-credential KEY SECRET   서비스 ID/보안 Key 설정
@@ -47,6 +47,11 @@ var configSetCredentialCmd = &cobra.Command{
 var configGetCmd = &cobra.Command{
 	Use:   "get",
 	Short: "현재 설정 확인 (자격증명은 마스킹됨)",
+	Long: `현재 저장된 설정을 출력합니다.
+
+표시 항목: 설정 파일 경로, consumer_key/consumer_secret(앞 4자만 노출·나머지 마스킹),
+default_format(기본 출력 형식), update_check(자동 업데이트 확인 여부).
+자격증명이 없으면 설정 안내 메시지를 함께 출력합니다.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
@@ -71,7 +76,14 @@ var configGetCmd = &cobra.Command{
 var configSetFormatCmd = &cobra.Command{
 	Use:   "set-format FORMAT",
 	Short: "기본 출력 형식 설정 (table|json|csv|geojson|xlsx)",
-	Args:  cobra.ExactArgs(1),
+	Long: `모든 명령의 기본 출력 형식을 ~/.sgis/config.yaml에 저장합니다.
+매 명령에서 -f/--format 을 지정하면 이 기본값을 그때만 덮어씁니다.
+
+형식: table(사람용 표), json, csv, geojson(경계 전용), xlsx(엑셀).
+
+예시:
+  sgis config set-format json`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		format := args[0]
 		if err := config.SetDefaultFormat(format); err != nil {

@@ -50,12 +50,7 @@ WGS84(EPSG:4326)로 재투영하세요. 기본 출력 형식은 geojson입니다
 			RunE:  makeBoundaryRunE(&ep),
 		}
 		for _, p := range ep.Params {
-			flagName := strings.ReplaceAll(p.Name, "_", "-")
-			desc := p.Description
-			if p.Required {
-				desc = "[필수] " + desc
-			}
-			sub.Flags().String(flagName, "", desc)
+			sub.Flags().String(strings.ReplaceAll(p.Name, "_", "-"), "", flagDesc(&p))
 		}
 		registerParamFlag(sub)
 		sub.Flags().Bool("wgs84", false, "좌표를 WGS84(EPSG:4326)로 재투영 (Leaflet 등 웹지도용, geojson 전용)")

@@ -38,12 +38,7 @@ func newGeocodeCmd() *cobra.Command {
 			RunE:  makeRunE(&ep),
 		}
 		for _, p := range ep.Params {
-			flagName := strings.ReplaceAll(p.Name, "_", "-")
-			desc := p.Description
-			if p.Required {
-				desc = "[필수] " + desc
-			}
-			sub.Flags().String(flagName, "", desc)
+			sub.Flags().String(strings.ReplaceAll(p.Name, "_", "-"), "", flagDesc(&p))
 		}
 		registerParamFlag(sub)
 		parent.AddCommand(sub)
