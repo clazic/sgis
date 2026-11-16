@@ -239,6 +239,7 @@ SGIS_MCP_TOKEN=$(openssl rand -hex 32) sgis-mcp --http 0.0.0.0:9100   # loopback
 | `SGIS_MCP_TOKEN` | 있으면 모든 요청에 `Authorization: Bearer <토큰>` 필수(상수 시간 비교). loopback(127.0.0.1·::1·localhost)이 아닌 주소는 이 값이 없으면 **시작 거부** |
 | `SGIS_MCP_ALLOWED_ORIGINS` | 쉼표 구분. `Origin` 머리글이 오면 loopback 출처(`http://localhost:*`, `http://127.0.0.1:*`)나 이 목록에 있어야 함(아니면 403) |
 | `SGIS_API_KEYS` | stdio 와 같음(기본 키) |
+| `MCP_RESULTS_DIR` · `MCP_RESULTS_TTL` · `MCP_RESULTS_MAX_BYTES` | 큰 결과 저장소(아래 "큰 결과"). stdio 에도 적용 |
 
 - 규격: MCP 2025-06-18 Streamable HTTP, 직접 구현(공식 SDK 미사용 — 의존성 추가 없이 stdio 와 같은 dispatch 를 씀).
   - `POST /mcp`: JSON-RPC 하나 또는 배치(10개까지). `Accept` 에 `text/event-stream` 이 있고 `_meta.progressToken` 이 있는 `tools/call` 이면 SSE 로 답함(진행 알림들 → 마지막에 응답). 아니면 `application/json`. 알림만 온 POST 는 202.
@@ -281,15 +282,39 @@ bearer_token_env_var = "SGIS_MCP_TOKEN"
 | `sgis_geocode` | `address`, `crs?`(wgs84·utmk), `pagenum?`, `resultcount?` | 주소→좌표 |
 | `sgis_reverse_geocode` | `x`, `y`, `crs?`(wgs84·utmk) | 좌표→주소 |
 | `sgis_transform_coord` | `src`, `dst`(EPSG), `x`, `y` | 좌표계 변환 |
-| `sgis_boundary` | `year`, `adm_cd`, `low_search?`, `wgs84?`(기본 true) | 행정구역 경계 GeoJSON 텍스트(UTM-K→WGS84 재투영은 CLI `--wgs84` 와 같음) |
+| `sgis_boundary` | `year`, `adm_cd`, `low_search?`, `wgs84?`(기본 true), `decimals?`(0~8), `properties?`(속성 목록), `format?`(geojson), `save?` | 행정구역 경계 GeoJSON 텍스트(UTM-K→WGS84 재투영은 CLI `--wgs84` 와 같음) |
+| `sgis_result_page` | `cursor`, `limit?`(행 수) | 저장된 큰 결과의 다음 쪽(같은 형식, 재조회 없음, **키 불필요**) |
+| `sgis_result_query` | `result_id`, `filter?`, `aggregate?`, `format?`, `save?` | 저장된 표 결과를 거르기·집계(재조회 없음, **키 불필요**) |
+
+통계 도구(`sgis_population` · `sgis_search_population` · `sgis_household` · `sgis_house` · `sgis_company` · `sgis_farm_household`)는 공통 선택 인자 `format?`(json·columns·csv), `filter?`, `aggregate?`, `save?` 를 받습니다.
 
 - `adm_cd` 는 2(시도)·5(시군구)·8(읍면동)자리만, `year` 는 `YYYY`. 통계 도구에서 `adm_cd`·`low_search` 를 둘 다 생략하면 `low_search=1`(전국 시도별)로 부릅니다(둘 다 없으면 SGIS 가 빈 결과를 줌).
-- 결과는 JSON 텍스트. 약 200KB 를 넘으면 잘라 내고 "잘림: 범위를 좁히세요" 를 붙입니다. `sgis_boundary` 는 feature 단위로 잘라 유효한 GeoJSON 을 유지하고 `sgis_mcp_note` 에 적습니다.
+- 결과는 JSON 텍스트. 큰 결과는 아래 "큰 결과" 규칙대로 쪽을 나눕니다(그 밖의 작은 조회 도구는 약 200KB 에서 잘라 "잘림: 범위를 좁히세요").
+
+### 큰 결과 (압축 형식 · 쪽 나누기 · 집계 · 전체 파일)
+
+응답 한 번은 약 200KB 상한 그대로이고, 같은 데이터를 더 촘촘히 · 나눠서 · 줄여서 · 맥락 밖 파일로 받습니다.
+
+- **형식** (`format`):
+  - 생략: 작은 결과는 지금과 같은 원본 JSON 배열(호환), 큰 결과는 `columns`.
+  - `json`: `{요약…, "data":[{…},…]}`.
+  - `columns`: `{요약…, "columns":[…], "rows":[[…],…], "dict":{"adm_cd":{"11010":"서울특별시 종로구",…}}, "dict_columns":{"adm_cd":"adm_nm"}}` — 이름 열(`adm_nm`, `addr_name`)은 빼고 코드→이름을 `dict` 로 한 번만.
+  - `csv`: 첫 줄 요약 JSON, 둘째 줄부터 머리줄 + 행.
+  - `sgis_boundary`: GeoJSON FeatureCollection(요약 칸이 앞에 붙은 유효한 GeoJSON). `decimals` 로 좌표 자릿수, `properties` 로 속성 고르기.
+- **요약 칸**(맨 앞): `total_rows`, `returned_rows`, `truncated`, `format`, `result_id`(저장했을 때), `next_cursor`(더 있을 때), `download`(저장했을 때 `{uri,name,mimeType,size,path,rows}`), 집계 시 `skipped_non_numeric`.
+- **쪽 나누기**: 상한을 넘으면 결과를 저장하고 첫 쪽 + `next_cursor` 를 줍니다. `sgis_result_page {cursor, limit?}` 로 다음 쪽(다시 조회 안 함, 키 불필요). 경계는 feature 단위로 나눠 쪽마다 유효한 GeoJSON. 만료되면 isError "결과가 만료됐어요 — 다시 조회하세요".
+- **거르기 · 집계**: `filter` = `{"열":["값",…]}` 목록 · `{"열":{"from":x,"to":y}}` 범위(숫자면 숫자 비교) · `{"열":"값"}`. `aggregate` = `{"group_by":["열",…],"op":"sum|avg|min|max|count","value":"숫자 열"}`(숫자 아닌 값은 건너뛰고 `skipped_non_numeric` 로 알림). 저장된 결과에는 `sgis_result_query`. SGIS 통계는 한 호출이 한 연도라 `latest` · `pivot` 은 두지 않았습니다.
+- **전체 파일**: 저장하면 content 에 `resource_link`(`sgis://results/<id>.csv`, `text/csv` / `.geojson`, `application/geo+json`, `size`, `description: "전체 N행"`)가 붙습니다.
+  - `resources/read {uri}` 로 파일 내용(20MB 넘으면 오류 — 내려받기 사용). `initialize` capabilities 에 `resources`. `resources/list` 는 빈 목록(결과는 임시).
+  - HTTP 모드: `GET /results/<id>.csv|geojson` — `SGIS_MCP_TOKEN` 이 있으면 같은 Bearer 필요, Content-Type · Content-Length · Content-Disposition 포함.
+- **저장소** (`MCP_RESULTS_DIR`, 기본 `~/.sgis/cache/mcp-results`): `<id>.jsonl`(쪽 나누기용 한 줄 한 행/feature), `<id>.csv` 또는 `<id>.geojson`, `<id>.meta.json`{id, tool, created, rows, columns, bytes, formats, args_summary, kind}. id 는 144bit 무작위(base64url). 키·토큰은 넣지 않고(받은 응답에서도 지움), 쓰기는 임시 파일 → rename(여러 프로세스 공유 가능).
+  - 결과가 상한을 넘거나 `save: true` 일 때만 저장. 보관 `MCP_RESULTS_TTL`(기본 1h), 폴더 상한 `MCP_RESULTS_MAX_BYTES`(기본 1GB, 넘으면 오래된 것부터 삭제). 시작할 때와 10분마다 정리.
+  - 게이트웨이 경유면 게이트웨이가 `MCP_RESULTS_DIR` 를 정해 넘기고 같은 폴더에서 직접 내려줍니다.
 - 엑셀·파일 저장, 설정 변경, 업데이트, 차트·지도 이미지는 MCP 도구에 없습니다.
 
 ### smoke
 
-- 키 없이: `initialize` → `tools/list` 성공(도구 13개).
+- 키 없이: `initialize` → `tools/list` 성공(도구 15개).
 - 키 있으면: 도구 `sgis_admin_codes`, 인자 `{}` → 시도 17개.
 
 stdio:

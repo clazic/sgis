@@ -35,6 +35,9 @@ const usage = `sgis-mcp — SGIS 통계지리정보서비스 stdio MCP 서버 (�
   SGIS_MCP_TOKEN            HTTP 모드: 있으면 Authorization: Bearer <토큰> 필수.
                             loopback 이 아닌 주소는 이 값 없이는 시작 거부
   SGIS_MCP_ALLOWED_ORIGINS  HTTP 모드: loopback 외에 허용할 Origin (쉼표)
+  MCP_RESULTS_DIR           큰 결과 저장 폴더 (기본 ~/.sgis/cache/mcp-results)
+  MCP_RESULTS_TTL           결과 보관 시간 (기본 1h; 3600 같은 초도 됨)
+  MCP_RESULTS_MAX_BYTES     결과 폴더 상한 바이트 (기본 1073741824 = 1GB)
 요청별 키:
   tools/call 의 params._meta["kr.pes/keys"] = ["key:secret", ...] (있으면 그 키만 씀)
   HTTP 모드에서는 머리글 X-Api-Keys: key:secret,key2:secret2 도 같음
@@ -70,10 +73,16 @@ func main() {
 	log.SetOutput(os.Stderr) // 내부 패키지의 log 출력도 stdout 을 더럽히지 않게
 
 	keys := loadDefaultKeys(logger)
-	srv := mcp.NewServer(mcp.Options{Version: version, DefaultKeys: keys, Logger: logger})
+	results, err := mcp.ResultStoreFromEnv()
+	if err != nil {
+		logger.Printf("시작 거부: %v", err)
+		os.Exit(1)
+	}
+	srv := mcp.NewServer(mcp.Options{Version: version, DefaultKeys: keys, Logger: logger, Results: results})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go results.RunCleanup(ctx) // 시작할 때와 10분마다 만료·용량 정리
 
 	if httpMode {
 		o := mcp.HTTPOptions{

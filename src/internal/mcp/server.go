@@ -14,12 +14,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/clazic/sgis/internal/api"
 	"github.com/clazic/sgis/internal/auth"
+	"github.com/clazic/sgis/internal/config"
 )
 
 const (
@@ -42,6 +44,10 @@ type Options struct {
 	APIBaseURL string
 	AuthURL    string
 	HTTPClient *http.Client
+	// Results는 큰 결과 저장소입니다. nil 이면 환경변수(MCP_RESULTS_DIR 등)·기본 폴더로 만듭니다.
+	Results *ResultStore
+	// PageBytes는 도구 응답 한 쪽 상한입니다(기본 MaxResultBytes ≈ 200KB, 테스트용).
+	PageBytes int
 	// Logger는 진단 출력(stderr)입니다. 키를 넣지 않습니다. nil이면 log.Default().
 	Logger *log.Logger
 }
@@ -54,6 +60,8 @@ type Server struct {
 	logger      *log.Logger
 	tools       []*Tool
 	toolByName  map[string]*Tool
+	results     *ResultStore
+	pageBytes   int
 
 	tokMu  sync.Mutex
 	tokens map[string]*auth.MemoryToken
@@ -84,7 +92,20 @@ func NewServer(opt Options) *Server {
 	if s.logger == nil {
 		s.logger = log.Default()
 	}
-	s.tools = buildTools()
+	s.results = opt.Results
+	if s.results == nil {
+		rs, err := ResultStoreFromEnv()
+		if err != nil {
+			s.logger.Printf("결과 저장소 설정 오류(%v) — 기본값을 씁니다", err)
+			rs = &ResultStore{Dir: filepath.Join(config.ConfigDir(), "cache", "mcp-results"), TTL: defaultResultsTTL, MaxBytes: defaultResultsMaxBytes}
+		}
+		s.results = rs
+	}
+	s.pageBytes = opt.PageBytes
+	if s.pageBytes <= 0 {
+		s.pageBytes = MaxResultBytes
+	}
+	s.tools = append(buildTools(), resultTools()...)
 	s.toolByName = map[string]*Tool{}
 	for _, t := range s.tools {
 		s.toolByName[t.Name] = t
@@ -213,6 +234,16 @@ func (s *Server) dispatch(ctx context.Context, msg rpcMessage, env *callEnv) *rp
 		return &rpcResponse{ID: msg.ID, Result: s.initializeResult(msg.Params)}
 	case "ping":
 		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{}}
+	case "resources/list":
+		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{"resources": []interface{}{}}}
+	case "resources/templates/list":
+		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{"resourceTemplates": []interface{}{}}}
+	case "resources/read":
+		res, rerr := s.readResource(msg.Params)
+		if rerr != nil {
+			return &rpcResponse{ID: msg.ID, Error: rerr}
+		}
+		return &rpcResponse{ID: msg.ID, Result: res}
 	case "tools/list":
 		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{"tools": s.toolDescriptors()}}
 	case "tools/call":
@@ -315,7 +346,8 @@ func (s *Server) initializeResult(params json.RawMessage) map[string]interface{}
 	return map[string]interface{}{
 		"protocolVersion": pv,
 		"capabilities": map[string]interface{}{
-			"tools": map[string]interface{}{"listChanged": false},
+			"tools":     map[string]interface{}{"listChanged": false},
+			"resources": map[string]interface{}{},
 		},
 		"serverInfo": map[string]interface{}{
 			"name":    "sgis-mcp",
@@ -348,12 +380,12 @@ func (s *Server) toolDescriptors() []map[string]interface{} {
 // ── tools/call ─────────────────────────────────────────────────────────────
 
 type toolResult struct {
-	Content []map[string]string `json:"content"`
-	IsError bool                `json:"isError,omitempty"`
+	Content []map[string]interface{} `json:"content"`
+	IsError bool                     `json:"isError,omitempty"`
 }
 
 func textResult(text string, isErr bool) toolResult {
-	return toolResult{Content: []map[string]string{{"type": "text", "text": text}}, IsError: isErr}
+	return toolResult{Content: []map[string]interface{}{{"type": "text", "text": text}}, IsError: isErr}
 }
 
 // callCtx는 tools/call 한 번의 상태입니다(쓰인 키·토큰 = 스크럽 대상).
@@ -362,6 +394,13 @@ type callCtx struct {
 	mu       sync.Mutex
 	secrets  []string
 	progress *progressReporter
+	links    []map[string]interface{}
+}
+
+func (c *callCtx) addLink(l map[string]interface{}) {
+	c.mu.Lock()
+	c.links = append(c.links, l)
+	c.mu.Unlock()
 }
 
 // report는 진행 알림을 보냅니다(progressToken 이 없으면 아무것도 안 함).
@@ -401,7 +440,9 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 			res = textResult("내부 오류가 났어요", true)
 		}
 		for i := range res.Content {
-			res.Content[i]["text"] = Scrub(res.Content[i]["text"], cc.secretList())
+			if t, ok := res.Content[i]["text"].(string); ok {
+				res.Content[i]["text"] = Scrub(t, cc.secretList())
+			}
 		}
 		if cc.progress != nil && ctx.Err() == nil {
 			if res.IsError {
@@ -427,6 +468,10 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 	if tok, has := p.Meta["progressToken"]; has && env.notify != nil && len(tok) > 0 && string(tok) != "null" {
 		cc.progress = newProgressReporter(tok, env.notify)
 		cc.progress.report(tool.Name+" 시작", false)
+	}
+
+	if tool.NoKeys {
+		return s.runTool(ctx, tool, cc, p.Arguments)
 	}
 
 	// 키 선택: 요청별 키(_meta 또는 X-Api-Keys 머리글)가 있으면 그것만, 없으면 기본 키.
@@ -462,7 +507,11 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 		cc.pool = s.defaultPool
 	}
 
-	args, err := tool.validate(p.Arguments)
+	return s.runTool(ctx, tool, cc, p.Arguments)
+}
+
+func (s *Server) runTool(ctx context.Context, tool *Tool, cc *callCtx, in map[string]interface{}) toolResult {
+	args, err := tool.validate(in)
 	if err != nil {
 		return textResult("입력 오류: "+err.Error(), true)
 	}
@@ -470,7 +519,11 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 	if err != nil {
 		return textResult(err.Error(), true)
 	}
-	return textResult(text, false)
+	res := textResult(text, false)
+	for _, l := range cc.links {
+		res.Content = append(res.Content, l)
+	}
+	return res
 }
 
 // tokenFor는 키 쌍 전용 메모리 토큰 캐시를 돌려줍니다(키마다 분리, 다른 키와 공유 안 함).
@@ -519,7 +572,8 @@ func (s *Server) callAPI(ctx context.Context, cc *callCtx, path string, params m
 		res, err := client.Get(ctx, path, params)
 		if err == nil {
 			cc.pool.markOK(i)
-			return res, nil
+			// 저장·응답 전에 원본에서도 키·토큰을 지움(결과 파일에 비밀이 들어가지 않게)
+			return json.RawMessage(Scrub(string(res), cc.secretList())), nil
 		}
 		lastErr = err
 		if ctx.Err() != nil {

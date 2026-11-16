@@ -16,12 +16,14 @@ import (
 )
 
 const (
-	defKey    = "DEFAULTKEY0001aaaa"
-	defSecret = "DEFAULTSECRET0001bbbb"
-	reqKey    = "REQUESTKEY0002cccc"
-	reqSecret = "REQUESTSECRET0002dddd"
-	badKey    = "BADKEY0003eeee"
-	badSecret = "BADSECRET0003ffff"
+	fakePopRows  = 301
+	fakeGeoFeats = 100
+	defKey       = "DEFAULTKEY0001aaaa"
+	defSecret    = "DEFAULTSECRET0001bbbb"
+	reqKey       = "REQUESTKEY0002cccc"
+	reqSecret    = "REQUESTSECRET0002dddd"
+	badKey       = "BADKEY0003eeee"
+	badSecret    = "BADSECRET0003ffff"
 )
 
 // fakeSGIS는 인증·통계 API 흉내 서버입니다. 키별로 다른 토큰을 주고, 받은 키·토큰을 기록합니다.
@@ -78,6 +80,25 @@ func newFakeSGIS(t *testing.T) *fakeSGIS {
 				return
 			}
 			fmt.Fprintf(w, `{"result":[{"cd":"11","addr_name":"서울특별시","tok":"%s"}],"errCd":0}`, tok)
+		case strings.HasSuffix(r.URL.Path, "/stats/population.json"):
+			f.mu.Lock()
+			f.apiCalls++
+			f.mu.Unlock()
+			var rows []string
+			for i := 0; i < fakePopRows; i++ {
+				pop := fmt.Sprint(1000 + i)
+				if i == fakePopRows-1 {
+					pop = "N/A"
+				}
+				rows = append(rows, fmt.Sprintf(`{"adm_cd":"%d","adm_nm":"서울특별시 테스트구 동%03d","tot_ppltn":"%s","avg_age":"42.%d","sido":"%d"}`, 11010500+i, i, pop, i%10, 11+i%2))
+			}
+			fmt.Fprintf(w, `{"result":[%s],"errCd":0}`, strings.Join(rows, ","))
+		case strings.HasSuffix(r.URL.Path, "/boundary/hadmarea.geojson"):
+			var feats []string
+			for i := 0; i < fakeGeoFeats; i++ {
+				feats = append(feats, fmt.Sprintf(`{"type":"Feature","properties":{"adm_cd":"%d","adm_nm":"동%d","x":"1"},"geometry":{"type":"Polygon","coordinates":[[[953932.123456,1952053.98765],[954932.5,1952053.5],[954932.5,1953053.5],[953932.123456,1952053.98765]]]}}`, 11010500+i, i))
+			}
+			fmt.Fprintf(w, `{"type":"FeatureCollection","features":[%s]}`, strings.Join(feats, ","))
 		default:
 			http.NotFound(w, r)
 		}
@@ -421,42 +442,6 @@ func TestConcurrentCallsDoNotBlock(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 2 || !strings.Contains(lines[0], `"id":2`) {
 		t.Errorf("빠른 요청이 먼저 답해야 함: %v", lines)
-	}
-}
-
-func TestBoundaryTextTruncatesByFeature(t *testing.T) {
-	var feats []string
-	for i := 0; i < 50; i++ {
-		feats = append(feats, fmt.Sprintf(`{"type":"Feature","properties":{"adm_cd":"%d"},"geometry":{"type":"Point","coordinates":[1000000.0,2000000.0]}}`, 11000+i))
-	}
-	raw := json.RawMessage(`{"type":"FeatureCollection","features":[` + strings.Join(feats, ",") + `]}`)
-	full, err := boundaryText(raw, true, MaxResultBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fc map[string]interface{}
-	if err := json.Unmarshal([]byte(full), &fc); err != nil {
-		t.Fatal(err)
-	}
-	c := fc["features"].([]interface{})[0].(map[string]interface{})["geometry"].(map[string]interface{})["coordinates"].([]interface{})
-	if c[0].(float64) != 127.5 || c[1].(float64) != 38 {
-		t.Errorf("WGS84 재투영·반올림: %v", c)
-	}
-	small, err := boundaryText(raw, false, 2000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(small) > 2000 {
-		t.Errorf("상한 초과: %d", len(small))
-	}
-	if err := json.Unmarshal([]byte(small), &fc); err != nil {
-		t.Fatalf("잘린 결과도 유효한 JSON 이어야 함: %v", err)
-	}
-	if !strings.Contains(fc["sgis_mcp_note"].(string), "잘림") {
-		t.Error("잘림 안내 없음")
-	}
-	if n := len(fc["features"].([]interface{})); n == 0 || n >= 50 {
-		t.Errorf("일부 feature 만 담아야 함: %d", n)
 	}
 }
 

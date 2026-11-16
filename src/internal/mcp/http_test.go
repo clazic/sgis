@@ -113,8 +113,8 @@ func TestHTTPFlowWithoutKeys(t *testing.T) {
 	}
 
 	m := readJSON(t, c.do("POST", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`, map[string]string{headerProtocol: "2025-06-18"}))
-	if n := len(m["result"].(map[string]interface{})["tools"].([]interface{})); n != 13 {
-		t.Errorf("도구 13개 기대: %d", n)
+	if n := len(m["result"].(map[string]interface{})["tools"].([]interface{})); n != 15 {
+		t.Errorf("도구 15개 기대: %d", n)
 	}
 
 	m = readJSON(t, c.do("POST", callLine(3, "sgis_admin_codes", `{}`, ""), nil))

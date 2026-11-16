@@ -13,7 +13,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/clazic/sgis/internal/api"
-	"github.com/clazic/sgis/internal/output"
 )
 
 // MaxResultBytes는 도구 결과 텍스트 상한(약 200KB)입니다.
@@ -24,7 +23,7 @@ const truncNote = "잘림: 결과가 커서 앞부분만 담았어요. 범위를
 // field는 도구 입력 하나입니다. JSON Schema와 검증이 같은 정의를 씁니다.
 type field struct {
 	Name     string
-	Type     string // "string" | "integer" | "number" | "boolean"
+	Type     string // "string" | "integer" | "number" | "boolean" | "array"(문자열 목록) | "object"
 	Required bool
 	Desc     string
 	Pattern  string
@@ -40,7 +39,9 @@ type Tool struct {
 	Title       string
 	Description string
 	Fields      []field
-	Handler     func(ctx context.Context, s *Server, cc *callCtx, args map[string]interface{}) (string, error)
+	// NoKeys면 API 키 없이 동작합니다(저장된 결과만 읽는 도구).
+	NoKeys  bool
+	Handler func(ctx context.Context, s *Server, cc *callCtx, args map[string]interface{}) (string, error)
 }
 
 func fptr(v float64) *float64 { return &v }
@@ -50,6 +51,10 @@ func (t *Tool) inputSchema() map[string]interface{} {
 	required := []string{}
 	for _, f := range t.Fields {
 		p := map[string]interface{}{"type": f.Type, "description": f.Desc}
+		if f.Type == "array" {
+			p["items"] = map[string]interface{}{"type": "string", "maxLength": 100}
+			p["maxItems"] = 100
+		}
 		if f.Pattern != "" {
 			p["pattern"] = f.Pattern
 		}
@@ -170,6 +175,29 @@ func (t *Tool) validate(in map[string]interface{}) (map[string]interface{}, erro
 				return nil, fmt.Errorf("%s 는 %v 이하여야 해요", f.Name, *f.Max)
 			}
 			out[f.Name] = x
+		case "array":
+			arr, ok := v.([]interface{})
+			if !ok || len(arr) > 100 {
+				return nil, fmt.Errorf("%s 는 문자열 목록(100개 이하)이어야 해요", f.Name)
+			}
+			list := make([]string, 0, len(arr))
+			for _, it := range arr {
+				sv, ok := it.(string)
+				if !ok || utf8.RuneCountInString(sv) > 100 {
+					return nil, fmt.Errorf("%s 는 문자열 목록이어야 해요", f.Name)
+				}
+				list = append(list, sv)
+			}
+			out[f.Name] = list
+		case "object":
+			m, ok := v.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("%s 는 객체여야 해요", f.Name)
+			}
+			if b, _ := json.Marshal(m); len(b) > 10000 {
+				return nil, fmt.Errorf("%s 가 너무 커요(10KB 이하)", f.Name)
+			}
+			out[f.Name] = m
 		case "boolean":
 			b, ok := v.(bool)
 			if !ok {
@@ -227,22 +255,49 @@ func statsTool(name, title, epName, desc, yearDesc string, extra ...field) *Tool
 		panic("endpoint missing: " + epName)
 	}
 	fields := append([]field{fYear(yearDesc), fAdmCd(false), fLowSearch()}, extra...)
+	fields = append(fields, tableFields()...)
 	return &Tool{
-		Name: name, Title: title, Description: desc, Fields: fields,
+		Name: name, Title: title, Description: desc + " " + bigTableHint, Fields: fields,
 		Handler: func(ctx context.Context, s *Server, cc *callCtx, a map[string]interface{}) (string, error) {
 			params := stringParams(a)
 			if params["adm_cd"] == "" && params["low_search"] == "" {
 				params["low_search"] = "1" // 둘 다 생략 시 errCd=-100 빈 결과 방지 (LEARNINGS)
 			}
-			return s.jsonCall(ctx, cc, ep.Path, params)
+			raw, err := s.callAPI(ctx, cc, ep.Path, params)
+			if err != nil {
+				return "", err
+			}
+			return s.tableResult(cc, name, a, raw)
 		},
 	}
 }
+
+const bigTableHint = "큰 표(전국 읍면동 등)는 먼저 filter/aggregate 로 줄이고, 전체가 필요하면 download(resource_link)를 쓰세요. 결과가 약 200KB 를 넘으면 첫 쪽과 next_cursor 를 주며 sgis_result_page 로 다음 쪽을 받습니다."
+
+// tableFields는 표를 내는 도구의 공통 선택 인자(형식·거르기·집계·저장)입니다.
+func tableFields() []field {
+	return []field{
+		{Name: "format", Type: "string", Enum: []string{"json", "columns", "csv"},
+			Desc: "결과 형식. 생략 시 작은 결과는 지금처럼 원본 JSON 배열, 큰 결과는 columns. json={요약, data:[객체]}, columns={요약, columns, rows, dict(adm_cd→adm_nm 등 이름은 한 번만)}, csv=첫 줄 요약 JSON + CSV"},
+		{Name: "filter", Type: "object",
+			Desc: `받은 뒤 거르기. {"열": ["값1","값2"]} 목록 안, {"열": {"from":x,"to":y}} 범위(숫자면 숫자 비교), {"열": "값"} 같음. 예: {"adm_cd":["11010","11020"]}`},
+		{Name: "aggregate", Type: "object",
+			Desc: `묶어 계산. {"group_by":["열",...], "op":"sum|avg|min|max|count", "value":"숫자 열"}. 숫자 아닌 값은 건너뛰고 skipped_non_numeric 로 알림`},
+		{Name: "save", Type: "boolean", Desc: "true 면 작아도 결과를 저장해 result_id·download 를 줌"},
+	}
+}
+
+// localArgs는 SGIS 로 보내지 않는 MCP 쪽 인자입니다.
+var localArgs = map[string]bool{"format": true, "filter": true, "aggregate": true, "save": true,
+	"properties": true, "decimals": true, "wgs84": true, "crs": true, "cursor": true, "limit": true, "result_id": true}
 
 // stringParams는 문자열 인자를 API 쿼리로 옮깁니다(이름이 같음).
 func stringParams(a map[string]interface{}) map[string]string {
 	p := map[string]string{}
 	for k, v := range a {
+		if localArgs[k] {
+			continue
+		}
 		if s, ok := v.(string); ok && s != "" {
 			p[k] = s
 		}
@@ -394,13 +449,18 @@ func buildTools() []*Tool {
 			Name: "sgis_boundary", Title: "행정구역 경계 GeoJSON",
 			Description: "행정구역(시도·시군구·읍면동) 경계를 GeoJSON FeatureCollection 텍스트로 돌려줍니다. " +
 				"SGIS 원본 좌표는 UTM-K(EPSG:5179)이고, wgs84=true(기본)면 CLI 의 --wgs84 와 같은 방식으로 경위도로 재투영합니다. " +
-				"좌표는 wgs84 소수 6자리 / UTM-K 소수 1자리로 반올림합니다. 결과가 약 200KB 를 넘으면 앞쪽 feature 만 담고 sgis_mcp_note 에 '잘림'을 적습니다 — 그때는 adm_cd 를 더 하위로 좁히거나 low_search 를 줄이세요. " +
+				"좌표는 기본 wgs84 소수 6자리 / UTM-K 소수 1자리(decimals 로 조절), properties 로 속성을 고를 수 있습니다. " +
+				"결과가 약 200KB 를 넘으면 feature 단위로 나눠 첫 쪽(유효한 GeoJSON, 맨 앞에 total_rows·next_cursor 등 요약 칸)과 download(.geojson resource_link)를 주고, sgis_result_page 로 다음 쪽을 받습니다. 지도용 전체 파일은 download 를 쓰세요. " +
 				"면적·인구 등 수치만 필요하면 통계 도구를 쓰세요.",
 			Fields: []field{
 				{Name: "year", Type: "string", Required: true, Pattern: patYear, MaxLen: 4, Desc: "경계 기준연도(YYYY, 2000~2025)"},
 				fAdmCd(true),
 				{Name: "low_search", Type: "string", Enum: []string{"0", "1", "2"}, MaxLen: 1, Desc: "하위 단계 포함 — 0=해당 지역 경계만, 1=1단계 하위 경계들"},
 				{Name: "wgs84", Type: "boolean", Default: true, Desc: "true=WGS84 경위도로 재투영(웹지도용), false=UTM-K 원본"},
+				{Name: "decimals", Type: "integer", Min: fptr(0), Max: fptr(8), Desc: "좌표 소수 자릿수(기본 wgs84 6, UTM-K 1). 줄이면 작아짐(wgs84 5 ≈ 1m)"},
+				{Name: "properties", Type: "array", Desc: "남길 feature 속성 이름 목록(예: [\"adm_cd\",\"adm_nm\"]). 생략=전부"},
+				{Name: "format", Type: "string", Enum: []string{"geojson"}, Desc: "geojson(유일)"},
+				{Name: "save", Type: "boolean", Desc: "true 면 작아도 저장해 result_id·download 를 줌"},
 			},
 			Handler: func(ctx context.Context, s *Server, cc *callCtx, a map[string]interface{}) (string, error) {
 				p := stringParams(a)
@@ -408,9 +468,8 @@ func buildTools() []*Tool {
 				if err != nil {
 					return "", err
 				}
-				wgs, _ := a["wgs84"].(bool)
 				cc.report(fmt.Sprintf("GeoJSON %dKB 받음, 좌표 정리 중", len(raw)/1024))
-				return boundaryText(raw, wgs, MaxResultBytes)
+				return s.geoResult(cc, "sgis_boundary", a, raw)
 			},
 		},
 	}
@@ -450,62 +509,6 @@ func capText(s string, limit int) string {
 		cut--
 	}
 	return s[:cut] + "\n…\n" + truncNote
-}
-
-// boundaryText는 GeoJSON을 (재투영·반올림 후) 텍스트로 만들고, 상한을 넘으면 feature 단위로 잘라
-// 유효한 GeoJSON을 유지한 채 sgis_mcp_note 에 잘림을 적습니다.
-func boundaryText(raw json.RawMessage, wgs84 bool, limit int) (string, error) {
-	var v interface{}
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return "", fmt.Errorf("GeoJSON 파싱 실패: %v", err)
-	}
-	if obj, ok := v.(map[string]interface{}); ok {
-		if _, hasErr := obj["errCd"]; hasErr && obj["type"] == nil {
-			if cd, _ := obj["errCd"].(float64); cd != 0 {
-				return "", fmt.Errorf("SGIS API 오류 (errCd=%v): %v", obj["errCd"], obj["errMsg"])
-			}
-		}
-	}
-	decimals := 1
-	if wgs84 {
-		v = output.ReprojectWGS84(v)
-		decimals = 6
-	}
-	v = roundCoords(v, decimals)
-
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	if len(b) <= limit {
-		return string(b), nil
-	}
-	obj, ok := v.(map[string]interface{})
-	feats, fok := obj["features"].([]interface{})
-	if !ok || !fok {
-		return capText(string(b), limit), nil
-	}
-	total := len(feats)
-	obj["features"] = []interface{}{}
-	obj["sgis_mcp_note"] = fmt.Sprintf("%s (전체 %d개 feature 중 %d개)", truncNote, total, 0)
-	base, _ := json.Marshal(obj)
-	size := len(base) + 32
-	kept := make([]interface{}, 0, total)
-	for _, f := range feats {
-		fb, _ := json.Marshal(f)
-		if size+len(fb)+1 > limit {
-			break
-		}
-		size += len(fb) + 1
-		kept = append(kept, f)
-	}
-	obj["features"] = kept
-	obj["sgis_mcp_note"] = fmt.Sprintf("%s (전체 %d개 feature 중 %d개)", truncNote, total, len(kept))
-	b, err = json.Marshal(obj)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
 }
 
 // roundCoords는 "coordinates" 배열의 숫자를 decimals 자리로 반올림합니다.
