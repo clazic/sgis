@@ -40,6 +40,51 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	getToken   tokenProvider
+	// onTokenExpired는 토큰 만료 errCd를 받았을 때 재발급 전에 호출됩니다(선택).
+	onTokenExpired func()
+}
+
+// ClientOptions는 NewClientWithOptions 설정입니다. CLI는 NewClient를 그대로 씁니다.
+type ClientOptions struct {
+	// BaseURL이 비어 있으면 기본 SGIS OpenAPI3 URL을 씁니다. 끝에 '/'가 있어야 합니다.
+	BaseURL string
+	// GetToken은 accessToken 공급자입니다(필수).
+	GetToken func(ctx context.Context) (string, error)
+	// OnTokenExpired는 토큰 만료 응답 시 재발급 전에 불립니다(캐시 무효화 등, 선택).
+	OnTokenExpired func()
+	// HTTPClient가 nil이면 기본 전송 설정의 클라이언트를 만듭니다.
+	HTTPClient *http.Client
+}
+
+// NewHTTPClient는 SGIS API 호출용 기본 HTTP 클라이언트를 만듭니다.
+func NewHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: httpClientTimeout,
+		Transport: &http.Transport{
+			Proxy:               http.ProxyFromEnvironment,
+			MaxIdleConnsPerHost: maxIdleConnsPerHost,
+			IdleConnTimeout:     idleConnTimeout,
+			ForceAttemptHTTP2:   true,
+		},
+	}
+}
+
+// NewClientWithOptions는 토큰 공급자·기본 URL을 직접 지정한 클라이언트를 만듭니다.
+// 파일 토큰 캐시(auth.GetToken)를 쓰지 않는 호출자(MCP 서버 키 풀 등)용입니다.
+func NewClientWithOptions(o ClientOptions) *Client {
+	c := &Client{
+		baseURL:        o.BaseURL,
+		httpClient:     o.HTTPClient,
+		getToken:       o.GetToken,
+		onTokenExpired: o.OnTokenExpired,
+	}
+	if c.baseURL == "" {
+		c.baseURL = apiBaseURL
+	}
+	if c.httpClient == nil {
+		c.httpClient = NewHTTPClient()
+	}
+	return c
 }
 
 // NewClient는 기본 설정으로 SGIS API 클라이언트를 생성합니다.
@@ -171,6 +216,9 @@ func (c *Client) doGet(ctx context.Context, path string, params map[string]strin
 			errMsg := maskToken(env.ErrMsg, token)
 			// 토큰 만료/무효 오류: 1회 강제 재발급 후 재시도
 			if !forceRefresh && isTokenExpiredError(env.ErrCd) {
+				if c.onTokenExpired != nil {
+					c.onTokenExpired()
+				}
 				newToken, tErr := c.getToken(ctx)
 				if tErr != nil {
 					return nil, fmt.Errorf("토큰 재발급 실패: %w", tErr)

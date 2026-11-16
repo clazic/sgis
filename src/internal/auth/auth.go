@@ -125,7 +125,12 @@ func saveTokenCache(tc *tokenCache) error {
 // issueToken은 SGIS 인증 엔드포인트에 GET 요청해 새 accessToken을 발급받습니다.
 // errCd != 0 → ErrInvalidCredential, 네트워크 실패 → ErrNetwork.
 func issueToken(ctx context.Context, client *http.Client, consumerKey, consumerSecret string) (*tokenCache, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authBaseURL, nil)
+	return issueTokenAt(ctx, client, authBaseURL, consumerKey, consumerSecret)
+}
+
+// issueTokenAt은 issueToken과 같지만 인증 엔드포인트 URL을 직접 받습니다.
+func issueTokenAt(ctx context.Context, client *http.Client, endpoint, consumerKey, consumerSecret string) (*tokenCache, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: 요청 생성 실패: %v", ErrNetwork, err)
 	}

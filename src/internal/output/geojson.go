@@ -40,6 +40,13 @@ func renderGeoJSON(result json.RawMessage, opts Options) error {
 	return err
 }
 
+// ReprojectWGS84 reprojects every "coordinates" array in a decoded GeoJSON
+// value from UTM-K (EPSG:5179) to WGS84 lon/lat and drops stale "bbox" keys.
+// It is the same transform the CLI applies for --wgs84.
+func ReprojectWGS84(v interface{}) interface{} {
+	return reprojectTree(v)
+}
+
 // reprojectTree walks a decoded GeoJSON value and reprojects every "coordinates"
 // array from EPSG:5179 to WGS84. A stale "bbox" (in source CRS units) is dropped
 // to avoid misleading map consumers. All other keys are recursed into.

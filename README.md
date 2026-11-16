@@ -174,6 +174,95 @@ sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson --wgs84   # WGS8
 
 ---
 
+## MCP 서버
+
+`sgis-mcp` 는 SGIS 조회를 **읽기 전용 MCP 도구**로 내놓는 stdio MCP 서버입니다(별도 실행 파일, `sgis` CLI 동작은 그대로).
+CLI 와 같은 API 클라이언트·엔드포인트 레지스트리·토큰 발급·좌표 재투영 코드를 함수로 직접 씁니다(CLI 프로세스를 띄우지 않음).
+MCP over stdio(줄 단위 JSON-RPC 2.0, protocolVersion `2025-06-18`), `initialize` · `tools/list` · `tools/call` · `ping` 지원, `tools/call` 은 동시에 처리합니다.
+
+### 설치 (릴리스 자산)
+
+CLI 와 같은 릴리스·같은 태그에 `sgis-mcp-<os>-<arch>` 가 올라가고 `SHA256SUMS` 에 함께 들어 있습니다.
+
+```bash
+VERSION=v0.5.0   # 원하는 릴리스 태그
+ASSET=sgis-mcp-darwin-arm64   # sgis-mcp-{darwin,linux}-{arm64,amd64}, sgis-mcp-windows-amd64.exe
+curl -fsSLO "https://github.com/clazic/sgis/releases/download/$VERSION/$ASSET"
+curl -fsSLO "https://github.com/clazic/sgis/releases/download/$VERSION/SHA256SUMS"
+grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c -
+install -m 755 "$ASSET" ~/.local/bin/sgis-mcp
+sgis-mcp --version
+```
+
+소스에서: `cd src && make native` → `src/bin/sgis-mcp-<os>-<arch>`.
+
+### 환경변수 · 키
+
+| 이름 | 뜻 |
+|------|----|
+| `SGIS_API_KEYS` | 기본 키. `consumer_key:consumer_secret` 를 쉼표로 여러 개(키 풀: 라운드로빈, 429·인증 오류 키는 잠시 쉼) |
+| (fallback) | `SGIS_API_KEYS` 가 없으면 `sgis` CLI 설정(`SGIS_CONSUMER_KEY`/`SGIS_CONSUMER_SECRET` → `~/.sgis/config.yaml`) 1개 |
+
+- **요청별 키**: `tools/call` 의 `params._meta["kr.pes/keys"]` = `["consumer_key:consumer_secret", ...]`. 있으면 **그 키만** 쓰고 기본 키로 넘어가지 않습니다. 둘 다 없으면 `isError: true` 로 "API 키가 없어요".
+- accessToken 은 **키 쌍별 메모리 캐시**에만 두고(4시간, 만료 24분 전 재발급) 다른 키 요청에 쓰지 않습니다. MCP 서버는 `~/.sgis/token.json` 을 읽거나 쓰지 않고, 응답 파일 캐시도 두지 않습니다.
+- 키·시크릿·accessToken 은 argv·로그·결과·오류 어디에도 원문으로 나오지 않습니다(응답 직전 `***<끝4자리>` 로 스크럽, URL 인코딩 형태 포함).
+
+### Codex / Claude Code 설정 예 (stdio)
+
+Claude Code:
+```bash
+claude mcp add sgis --env SGIS_API_KEYS="KEY1:SECRET1,KEY2:SECRET2" -- ~/.local/bin/sgis-mcp
+```
+또는 `.mcp.json`:
+```json
+{ "mcpServers": { "sgis": { "command": "/Users/me/.local/bin/sgis-mcp", "env": { "SGIS_API_KEYS": "KEY1:SECRET1" } } } }
+```
+
+Codex (`~/.codex/config.toml`):
+```toml
+[mcp_servers.sgis]
+command = "/Users/me/.local/bin/sgis-mcp"
+env = { SGIS_API_KEYS = "KEY1:SECRET1" }
+```
+
+### 도구 (모두 읽기 전용)
+
+| 도구 | 입력 | 하는 일 |
+|------|------|---------|
+| `sgis_admin_codes` | `cd?`(2·5자리) | 행정구역 코드 단계별 조회(생략=시도, 2자리=시군구, 5자리=읍면동) |
+| `sgis_years` | — | 통계 가용 기준연도 |
+| `sgis_population` | `year`, `adm_cd?`, `low_search?` | 총인구·평균나이·노령화지수 등 |
+| `sgis_search_population` | `year`, `adm_cd?`, `low_search?`, `gender?`, `age_type?`, `edu_level?`, `mrg_state?` | 조건별 인구 |
+| `sgis_household` | `year`, `adm_cd?`, `low_search?`, `household_type?`, `ocptn_type?` | 가구통계 |
+| `sgis_house` | `year`, `adm_cd?`, `low_search?`, `house_type?`, `const_year?`, `house_area_cd?` | 주택통계 |
+| `sgis_company` | `year`, `adm_cd?`, `low_search?`, `class_code?`, `theme_cd?` | 사업체·종사자 수 |
+| `sgis_farm_household` | `year`(5년 주기), `adm_cd?`, `low_search?` | 농가통계 |
+| `sgis_industry_codes` | `class_deg`, `class_code?` | KSIC 산업분류 코드 |
+| `sgis_geocode` | `address`, `crs?`(wgs84·utmk), `pagenum?`, `resultcount?` | 주소→좌표 |
+| `sgis_reverse_geocode` | `x`, `y`, `crs?`(wgs84·utmk) | 좌표→주소 |
+| `sgis_transform_coord` | `src`, `dst`(EPSG), `x`, `y` | 좌표계 변환 |
+| `sgis_boundary` | `year`, `adm_cd`, `low_search?`, `wgs84?`(기본 true) | 행정구역 경계 GeoJSON 텍스트(UTM-K→WGS84 재투영은 CLI `--wgs84` 와 같음) |
+
+- `adm_cd` 는 2(시도)·5(시군구)·8(읍면동)자리만, `year` 는 `YYYY`. 통계 도구에서 `adm_cd`·`low_search` 를 둘 다 생략하면 `low_search=1`(전국 시도별)로 부릅니다(둘 다 없으면 SGIS 가 빈 결과를 줌).
+- 결과는 JSON 텍스트. 약 200KB 를 넘으면 잘라 내고 "잘림: 범위를 좁히세요" 를 붙입니다. `sgis_boundary` 는 feature 단위로 잘라 유효한 GeoJSON 을 유지하고 `sgis_mcp_note` 에 적습니다.
+- 엑셀·파일 저장, 설정 변경, 업데이트, 차트·지도 이미지는 MCP 도구에 없습니다.
+
+### smoke
+
+- 키 없이: `initialize` → `tools/list` 성공(도구 13개).
+- 키 있으면: 도구 `sgis_admin_codes`, 인자 `{}` → 시도 17개.
+
+```bash
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sgis_admin_codes","arguments":{}}}' \
+  | sgis-mcp
+```
+
+---
+
 ## 지원 플랫폼
 
 | OS | 아키텍처 | 설치 방법 |

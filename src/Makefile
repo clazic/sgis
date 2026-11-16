@@ -1,6 +1,7 @@
 # SGIS CLI 멀티플랫폼 빌드
 # 산출물: src/bin/ 과 스킬 루트 ../apps/ 두 곳에 동일 배치
 # 파일명 컨벤션: sgis-<os>-<arch>[.exe] (release.yml / install.sh 와 일치)
+#               MCP 서버: sgis-mcp-<os>-<arch>[.exe] (./cmd/sgis-mcp)
 # CGO=0 everywhere — sgis는 sqlite/parquet 미사용이므로 cross-compiler 불필요
 #
 # 사용법:
@@ -26,7 +27,13 @@ build:
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-linux-amd64       .
 	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-linux-arm64       .
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-windows-amd64.exe .
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-darwin-arm64      ./cmd/sgis-mcp
+	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-darwin-amd64      ./cmd/sgis-mcp
+	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-linux-amd64       ./cmd/sgis-mcp
+	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-linux-arm64       ./cmd/sgis-mcp
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-windows-amd64.exe ./cmd/sgis-mcp
 	@cp $(BIN)/sgis-darwin-arm64 $(BIN)/sgis-darwin-amd64 $(BIN)/sgis-linux-amd64 $(BIN)/sgis-linux-arm64 $(BIN)/sgis-windows-amd64.exe $(APPS)/
+	@cp $(BIN)/sgis-mcp-darwin-arm64 $(BIN)/sgis-mcp-darwin-amd64 $(BIN)/sgis-mcp-linux-amd64 $(BIN)/sgis-mcp-linux-arm64 $(BIN)/sgis-mcp-windows-amd64.exe $(APPS)/
 	@echo "✅ 빌드 완료 — src/bin/ 과 ../apps/ 에 배치됨"
 	@ls -lh $(BIN)/sgis-*
 
@@ -36,7 +43,8 @@ native:
 	$(eval NATIVE_ARCH := $(shell go env GOARCH))
 	$(eval NATIVE_EXT := $(if $(filter windows,$(NATIVE_OS)),.exe,))
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-$(NATIVE_OS)-$(NATIVE_ARCH)$(NATIVE_EXT) .
-	@cp $(BIN)/sgis-$(NATIVE_OS)-$(NATIVE_ARCH)$(NATIVE_EXT) $(APPS)/
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BIN)/sgis-mcp-$(NATIVE_OS)-$(NATIVE_ARCH)$(NATIVE_EXT) ./cmd/sgis-mcp
+	@cp $(BIN)/sgis-$(NATIVE_OS)-$(NATIVE_ARCH)$(NATIVE_EXT) $(BIN)/sgis-mcp-$(NATIVE_OS)-$(NATIVE_ARCH)$(NATIVE_EXT) $(APPS)/
 	@echo "✅ 네이티브 빌드 완료 ($(NATIVE_OS)/$(NATIVE_ARCH))"
 
 clean:
