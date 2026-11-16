@@ -409,6 +409,7 @@ func buildTools() []*Tool {
 					return "", err
 				}
 				wgs, _ := a["wgs84"].(bool)
+				cc.report(fmt.Sprintf("GeoJSON %dKB 받음, 좌표 정리 중", len(raw)/1024))
 				return boundaryText(raw, wgs, MaxResultBytes)
 			},
 		},

@@ -53,6 +53,13 @@ func (m *MemoryToken) Token(ctx context.Context) (string, error) {
 	return tc.AccessToken, nil
 }
 
+// Valid는 재발급 없이 쓸 수 있는 토큰이 캐시에 있는지 알려 줍니다.
+func (m *MemoryToken) Valid() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tc != nil && !needsRefresh(m.tc)
+}
+
 // Invalidate는 캐시된 토큰을 버려 다음 Token 호출이 재발급하게 합니다.
 func (m *MemoryToken) Invalidate() {
 	m.mu.Lock()

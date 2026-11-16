@@ -179,6 +179,7 @@ sgis boundary hadmarea --adm-cd 11 --year 2025 --format geojson --wgs84   # WGS8
 `sgis-mcp` 는 SGIS 조회를 **읽기 전용 MCP 도구**로 내놓는 stdio MCP 서버입니다(별도 실행 파일, `sgis` CLI 동작은 그대로).
 CLI 와 같은 API 클라이언트·엔드포인트 레지스트리·토큰 발급·좌표 재투영 코드를 함수로 직접 씁니다(CLI 프로세스를 띄우지 않음).
 MCP over stdio(줄 단위 JSON-RPC 2.0, protocolVersion `2025-06-18`), `initialize` · `tools/list` · `tools/call` · `ping` 지원, `tools/call` 은 동시에 처리합니다.
+`--http` 를 주면 게이트웨이 없이 **Streamable HTTP** 단독 서버로 뜹니다(아래). 두 모드는 같은 도구 코드를 씁니다.
 
 ### 설치 (릴리스 자산)
 
@@ -225,6 +226,45 @@ command = "/Users/me/.local/bin/sgis-mcp"
 env = { SGIS_API_KEYS = "KEY1:SECRET1" }
 ```
 
+### HTTP 모드 (단독 Streamable HTTP)
+
+```bash
+sgis-mcp --http                    # 127.0.0.1:8080, 경로 /mcp
+sgis-mcp --http 127.0.0.1:9100     # 주소 지정
+SGIS_MCP_TOKEN=$(openssl rand -hex 32) sgis-mcp --http 0.0.0.0:9100   # loopback 밖은 토큰 필수
+```
+
+| 환경변수 | 뜻 |
+|----------|----|
+| `SGIS_MCP_TOKEN` | 있으면 모든 요청에 `Authorization: Bearer <토큰>` 필수(상수 시간 비교). loopback(127.0.0.1·::1·localhost)이 아닌 주소는 이 값이 없으면 **시작 거부** |
+| `SGIS_MCP_ALLOWED_ORIGINS` | 쉼표 구분. `Origin` 머리글이 오면 loopback 출처(`http://localhost:*`, `http://127.0.0.1:*`)나 이 목록에 있어야 함(아니면 403) |
+| `SGIS_API_KEYS` | stdio 와 같음(기본 키) |
+
+- 규격: MCP 2025-06-18 Streamable HTTP, 직접 구현(공식 SDK 미사용 — 의존성 추가 없이 stdio 와 같은 dispatch 를 씀).
+  - `POST /mcp`: JSON-RPC 하나 또는 배치(10개까지). `Accept` 에 `text/event-stream` 이 있고 `_meta.progressToken` 이 있는 `tools/call` 이면 SSE 로 답함(진행 알림들 → 마지막에 응답). 아니면 `application/json`. 알림만 온 POST 는 202.
+  - 세션: `initialize` 응답 머리글 `Mcp-Session-Id`(256bit 무작위). 이후 요청은 그 머리글 필수(없으면 400, 모르는/만료 세션 404). `DELETE /mcp` 로 끝, 1시간 미사용 시 버림.
+  - `GET /mcp`(세션 머리글 + `Accept: text/event-stream`): 서버 먼저 알림용 SSE, 보낼 게 없으면 15초마다 `: ping`.
+  - `MCP-Protocol-Version` 머리글이 모르는 값이면 400. 본문 1MB 상한(413).
+- 요청별 키: 머리글 `X-Api-Keys: key1:secret1,key2:secret2` → 그 POST 의 모든 `tools/call` 에 `_meta["kr.pes/keys"]` 와 똑같이 적용(기본 키로 안 넘어감). 둘 다 있으면 `_meta` 우선.
+- HTTP 응답·SSE 이벤트 전부 키·시크릿·토큰 스크럽. 접근 기록(stderr)은 메서드·도구 이름·걸린 시간만.
+
+Claude Code (HTTP):
+```bash
+claude mcp add --transport http sgis http://127.0.0.1:8080/mcp --header "Authorization: Bearer $SGIS_MCP_TOKEN"
+```
+
+Codex (`~/.codex/config.toml`, HTTP):
+```toml
+[mcp_servers.sgis]
+url = "http://127.0.0.1:8080/mcp"
+bearer_token_env_var = "SGIS_MCP_TOKEN"
+```
+
+### 진행 알림 · 취소
+
+- `tools/call` 의 `params._meta.progressToken` 이 있으면 `notifications/progress` 를 보냅니다(stdio 는 stdout 줄, HTTP 는 그 POST 의 SSE). 시작·끝은 항상, 중간(토큰 발급, 다음 키로 넘어감, `sgis_boundary` GeoJSON 정리)은 1초에 한 번까지. 토큰이 없으면 보내지 않습니다.
+- `notifications/cancelled {requestId}` 를 받으면 그 요청의 SGIS HTTP 호출을 끊고 그 요청에는 답하지 않습니다. HTTP 모드에서 POST 연결이 끊겨도 취소로 봅니다.
+
 ### 도구 (모두 읽기 전용)
 
 | 도구 | 입력 | 하는 일 |
@@ -252,6 +292,7 @@ env = { SGIS_API_KEYS = "KEY1:SECRET1" }
 - 키 없이: `initialize` → `tools/list` 성공(도구 13개).
 - 키 있으면: 도구 `sgis_admin_codes`, 인자 `{}` → 시도 17개.
 
+stdio:
 ```bash
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' \
@@ -259,6 +300,14 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sgis_admin_codes","arguments":{}}}' \
   | sgis-mcp
+```
+
+HTTP (`sgis-mcp --http` 를 띄운 뒤):
+```bash
+U=http://127.0.0.1:8080/mcp; H=(-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream')
+SID=$(curl -s -D - -o /dev/null "${H[@]}" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}' $U | awk 'tolower($1)=="mcp-session-id:"{print $2}' | tr -d '\r')
+curl -s "${H[@]}" -H "Mcp-Session-Id: $SID" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' $U
+curl -s "${H[@]}" -H "Mcp-Session-Id: $SID" -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sgis_admin_codes","arguments":{}}}' $U
 ```
 
 ---

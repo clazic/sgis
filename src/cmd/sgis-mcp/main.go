@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/clazic/sgis/internal/config"
@@ -23,25 +24,42 @@ const usage = `sgis-mcp — SGIS 통계지리정보서비스 stdio MCP 서버 (�
 
 사용법:
   sgis-mcp            stdin/stdout 으로 MCP(JSON-RPC 2.0, 줄 단위) 서버 실행
+  sgis-mcp --http [주소]
+                      Streamable HTTP 단독 서버 (경로 /mcp, 기본 127.0.0.1:8080)
   sgis-mcp --version  버전 출력
   sgis-mcp --help     이 도움말
 
 환경변수:
   SGIS_API_KEYS  consumer_key:consumer_secret 를 쉼표로 여러 개 (키 풀, 라운드로빈)
                  없으면 sgis CLI 설정(SGIS_CONSUMER_KEY/SECRET, ~/.sgis/config.yaml)을 씀
+  SGIS_MCP_TOKEN            HTTP 모드: 있으면 Authorization: Bearer <토큰> 필수.
+                            loopback 이 아닌 주소는 이 값 없이는 시작 거부
+  SGIS_MCP_ALLOWED_ORIGINS  HTTP 모드: loopback 외에 허용할 Origin (쉼표)
 요청별 키:
   tools/call 의 params._meta["kr.pes/keys"] = ["key:secret", ...] (있으면 그 키만 씀)
+  HTTP 모드에서는 머리글 X-Api-Keys: key:secret,key2:secret2 도 같음
 `
 
 func main() {
-	for _, a := range os.Args[1:] {
-		switch a {
-		case "--version", "-v", "version":
+	httpMode, addr := false, "127.0.0.1:8080"
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--version" || a == "-v" || a == "version":
 			fmt.Println(version)
 			return
-		case "--help", "-h", "help":
+		case a == "--help" || a == "-h" || a == "help":
 			fmt.Print(usage)
 			return
+		case a == "--http":
+			httpMode = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				addr = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--http="):
+			httpMode, addr = true, strings.TrimPrefix(a, "--http=")
 		default:
 			fmt.Fprintf(os.Stderr, "알 수 없는 인자입니다. --help 를 보세요.\n")
 			os.Exit(2)
@@ -56,6 +74,25 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if httpMode {
+		o := mcp.HTTPOptions{
+			Token:          os.Getenv("SGIS_MCP_TOKEN"),
+			AllowedOrigins: mcp.ParseOrigins(os.Getenv("SGIS_MCP_ALLOWED_ORIGINS")),
+			AccessLog:      logger,
+		}
+		if err := mcp.CheckBind(addr, o.Token); err != nil {
+			logger.Printf("시작 거부: %v", err)
+			os.Exit(1)
+		}
+		logger.Printf("HTTP 모드: http://%s/mcp (토큰 %s)", addr, map[bool]string{true: "필수", false: "없음"}[o.Token != ""])
+		if err := srv.RunHTTP(ctx, addr, o); err != nil {
+			logger.Printf("HTTP 서버 오류: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := srv.Serve(ctx, os.Stdin, os.Stdout); err != nil {
 		logger.Printf("입력 읽기 오류로 종료합니다")
 		os.Exit(1)

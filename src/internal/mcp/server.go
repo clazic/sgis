@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/clazic/sgis/internal/api"
 	"github.com/clazic/sgis/internal/auth"
@@ -45,7 +46,7 @@ type Options struct {
 	Logger *log.Logger
 }
 
-// Server는 stdio MCP 서버입니다.
+// Server는 MCP 서버입니다(stdio · Streamable HTTP 공통 도구 코드).
 type Server struct {
 	opt         Options
 	defaultPool *keyPool
@@ -60,8 +61,10 @@ type Server struct {
 	outMu sync.Mutex
 	out   io.Writer
 
-	reqMu    sync.Mutex
-	inflight map[string]context.CancelFunc
+	stdioSess *session
+
+	sessMu   sync.Mutex
+	sessions map[string]*session
 }
 
 // NewServer는 서버를 만듭니다.
@@ -72,7 +75,8 @@ func NewServer(opt Options) *Server {
 		http:        opt.HTTPClient,
 		logger:      opt.Logger,
 		tokens:      map[string]*auth.MemoryToken{},
-		inflight:    map[string]context.CancelFunc{},
+		stdioSess:   newSession(""),
+		sessions:    map[string]*session{},
 	}
 	if s.http == nil {
 		s.http = api.NewHTTPClient()
@@ -99,6 +103,10 @@ type rpcMessage struct {
 	Error   json.RawMessage `json:"error,omitempty"`
 }
 
+func (m rpcMessage) isNotification() bool {
+	return len(m.ID) == 0 || string(m.ID) == "null"
+}
+
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -111,7 +119,121 @@ type rpcResponse struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
-// Serve는 r에서 줄 단위 JSON-RPC를 읽고 w에 답합니다. r이 끝나면 진행 중인 호출을 기다린 뒤 돌아옵니다.
+type rpcNotification struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+}
+
+func marshalResponse(resp rpcResponse) []byte {
+	resp.JSONRPC = "2.0"
+	if resp.ID == nil {
+		resp.ID = json.RawMessage("null")
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		b, _ = json.Marshal(rpcResponse{JSONRPC: "2.0", ID: resp.ID, Error: &rpcError{Code: -32603, Message: "응답 직렬화 실패"}})
+	}
+	return b
+}
+
+// session은 요청 취소 대상(진행 중 tools/call)을 들고 있는 단위입니다.
+// stdio 는 하나, HTTP 는 Mcp-Session-Id 마다 하나.
+type session struct {
+	id       string
+	mu       sync.Mutex
+	inflight map[string]context.CancelFunc
+	lastUsed time.Time
+	events   chan []byte   // 서버가 먼저 보내는 알림(GET 스트림)
+	closed   chan struct{} // 세션 종료
+	once     sync.Once
+}
+
+func newSession(id string) *session {
+	return &session{id: id, inflight: map[string]context.CancelFunc{}, lastUsed: time.Now(),
+		events: make(chan []byte, 16), closed: make(chan struct{})}
+}
+
+func (ss *session) register(id string, cancel context.CancelFunc) {
+	ss.mu.Lock()
+	ss.inflight[id] = cancel
+	ss.mu.Unlock()
+}
+
+func (ss *session) unregister(id string) {
+	ss.mu.Lock()
+	delete(ss.inflight, id)
+	ss.mu.Unlock()
+}
+
+func (ss *session) cancel(id string) {
+	ss.mu.Lock()
+	c := ss.inflight[id]
+	ss.mu.Unlock()
+	if c != nil {
+		c()
+	}
+}
+
+func (ss *session) close() {
+	ss.once.Do(func() {
+		close(ss.closed)
+		ss.mu.Lock()
+		for _, c := range ss.inflight {
+			c()
+		}
+		ss.mu.Unlock()
+	})
+}
+
+// callEnv는 메시지 하나를 처리할 때의 전송 계층 정보입니다.
+type callEnv struct {
+	sess *session
+	// notify는 이 요청에 묶인 알림(진행 등)을 보냅니다. nil 이면 보내지 않음.
+	notify func(n rpcNotification)
+	// headerKeys는 HTTP X-Api-Keys 머리글 키(있으면 _meta 와 같게 취급).
+	headerKeys    []string
+	hasHeaderKeys bool
+}
+
+// dispatch는 요청 하나를 처리해 응답을 돌려줍니다. 알림이거나 취소된 요청이면 nil.
+func (s *Server) dispatch(ctx context.Context, msg rpcMessage, env *callEnv) *rpcResponse {
+	if msg.Method == "" {
+		if msg.isNotification() && msg.Result == nil && msg.Error == nil {
+			return &rpcResponse{Error: &rpcError{Code: -32600, Message: "잘못된 요청"}}
+		}
+		return nil // 클라이언트가 보낸 응답 — 무시
+	}
+	if msg.isNotification() {
+		s.handleNotification(msg, env)
+		return nil
+	}
+	switch msg.Method {
+	case "initialize":
+		return &rpcResponse{ID: msg.ID, Result: s.initializeResult(msg.Params)}
+	case "ping":
+		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{}}
+	case "tools/list":
+		return &rpcResponse{ID: msg.ID, Result: map[string]interface{}{"tools": s.toolDescriptors()}}
+	case "tools/call":
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		key := string(msg.ID)
+		env.sess.register(key, cancel)
+		defer env.sess.unregister(key)
+		res := s.callTool(cctx, msg.Params, env)
+		if cctx.Err() != nil {
+			return nil // 취소됨(notifications/cancelled · 연결 끊김) — 답하지 않음
+		}
+		return &rpcResponse{ID: msg.ID, Result: res}
+	default:
+		return &rpcResponse{ID: msg.ID, Error: &rpcError{Code: -32601, Message: "지원하지 않는 메서드: " + truncateRunes(msg.Method, 64)}}
+	}
+}
+
+// ── stdio ──────────────────────────────────────────────────────────────────
+
+// Serve는 r에서 줄 단위 JSON-RPC를 읽고 w에 답합니다(stdio 모드). r이 끝나면 진행 중인 호출을 기다린 뒤 돌아옵니다.
 func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	s.out = w
 	br := bufio.NewReaderSize(r, 1<<20)
@@ -131,19 +253,14 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 }
 
-func (s *Server) write(resp rpcResponse) {
-	resp.JSONRPC = "2.0"
-	if resp.ID == nil {
-		resp.ID = json.RawMessage("null")
-	}
-	b, err := json.Marshal(resp)
-	if err != nil {
-		b, _ = json.Marshal(rpcResponse{JSONRPC: "2.0", ID: resp.ID, Error: &rpcError{Code: -32603, Message: "응답 직렬화 실패"}})
-	}
+func (s *Server) writeLine(b []byte) {
+	text := Scrub(string(b), secretsOf(s.opt.DefaultKeys))
 	s.outMu.Lock()
 	defer s.outMu.Unlock()
-	_, _ = s.out.Write(append(b, '\n'))
+	_, _ = io.WriteString(s.out, text+"\n")
 }
+
+func (s *Server) write(resp rpcResponse) { s.writeLine(marshalResponse(resp)) }
 
 func (s *Server) handleLine(ctx context.Context, line []byte, wg *sync.WaitGroup) {
 	var msg rpcMessage
@@ -151,53 +268,29 @@ func (s *Server) handleLine(ctx context.Context, line []byte, wg *sync.WaitGroup
 		s.write(rpcResponse{Error: &rpcError{Code: -32700, Message: "JSON 파싱 오류"}})
 		return
 	}
-	isNotification := len(msg.ID) == 0 || string(msg.ID) == "null"
-	if msg.Method == "" {
-		// 클라이언트가 보낸 응답(result/error) — 이 서버는 요청을 보내지 않으므로 무시.
-		if isNotification && msg.Result == nil && msg.Error == nil {
-			s.write(rpcResponse{Error: &rpcError{Code: -32600, Message: "잘못된 요청"}})
+	env := &callEnv{sess: s.stdioSess, notify: func(n rpcNotification) {
+		b, err := json.Marshal(n)
+		if err == nil {
+			s.writeLine(b)
 		}
-		return
-	}
-	if isNotification {
-		s.handleNotification(msg)
-		return
-	}
-
-	switch msg.Method {
-	case "initialize":
-		s.write(rpcResponse{ID: msg.ID, Result: s.initializeResult(msg.Params)})
-	case "ping":
-		s.write(rpcResponse{ID: msg.ID, Result: map[string]interface{}{}})
-	case "tools/list":
-		s.write(rpcResponse{ID: msg.ID, Result: map[string]interface{}{"tools": s.toolDescriptors()}})
-	case "tools/call":
-		cctx, cancel := context.WithCancel(ctx)
-		key := string(msg.ID)
-		s.reqMu.Lock()
-		s.inflight[key] = cancel
-		s.reqMu.Unlock()
+	}}
+	if msg.Method == "tools/call" && !msg.isNotification() {
+		// 동시 처리: 한 요청이 다른 요청을 막지 않음
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			defer func() {
-				s.reqMu.Lock()
-				delete(s.inflight, key)
-				s.reqMu.Unlock()
-				cancel()
-			}()
-			res := s.callTool(cctx, msg.Params)
-			if cctx.Err() != nil && ctx.Err() == nil {
-				return // 클라이언트가 취소함 — 답하지 않음
+			if resp := s.dispatch(ctx, msg, env); resp != nil {
+				s.write(*resp)
 			}
-			s.write(rpcResponse{ID: msg.ID, Result: res})
 		}()
-	default:
-		s.write(rpcResponse{ID: msg.ID, Error: &rpcError{Code: -32601, Message: "지원하지 않는 메서드: " + truncateRunes(msg.Method, 64)}})
+		return
+	}
+	if resp := s.dispatch(ctx, msg, env); resp != nil {
+		s.write(*resp)
 	}
 }
 
-func (s *Server) handleNotification(msg rpcMessage) {
+func (s *Server) handleNotification(msg rpcMessage, env *callEnv) {
 	if msg.Method != "notifications/cancelled" {
 		return // notifications/initialized 등은 할 일 없음
 	}
@@ -207,12 +300,7 @@ func (s *Server) handleNotification(msg rpcMessage) {
 	if json.Unmarshal(msg.Params, &p) != nil || len(p.RequestID) == 0 {
 		return
 	}
-	s.reqMu.Lock()
-	cancel := s.inflight[string(p.RequestID)]
-	s.reqMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	env.sess.cancel(string(p.RequestID))
 }
 
 func (s *Server) initializeResult(params json.RawMessage) map[string]interface{} {
@@ -270,9 +358,17 @@ func textResult(text string, isErr bool) toolResult {
 
 // callCtx는 tools/call 한 번의 상태입니다(쓰인 키·토큰 = 스크럽 대상).
 type callCtx struct {
-	pool    *keyPool
-	mu      sync.Mutex
-	secrets []string
+	pool     *keyPool
+	mu       sync.Mutex
+	secrets  []string
+	progress *progressReporter
+}
+
+// report는 진행 알림을 보냅니다(progressToken 이 없으면 아무것도 안 함).
+func (c *callCtx) report(msg string) {
+	if c != nil && c.progress != nil {
+		c.progress.report(msg, false)
+	}
 }
 
 func (c *callCtx) addSecret(v string) {
@@ -290,15 +386,29 @@ func (c *callCtx) secretList() []string {
 	return append([]string(nil), c.secrets...)
 }
 
-func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (res toolResult) {
+func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv) (res toolResult) {
 	cc := &callCtx{}
 	cc.secrets = append(cc.secrets, secretsOf(s.opt.DefaultKeys)...)
+	for _, it := range env.headerKeys {
+		cc.addSecret(it)
+		if i := strings.Index(it, ":"); i >= 0 {
+			cc.addSecret(it[:i])
+			cc.addSecret(it[i+1:])
+		}
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			res = textResult("내부 오류가 났어요", true)
 		}
 		for i := range res.Content {
 			res.Content[i]["text"] = Scrub(res.Content[i]["text"], cc.secretList())
+		}
+		if cc.progress != nil && ctx.Err() == nil {
+			if res.IsError {
+				cc.progress.report("실패", true)
+			} else {
+				cc.progress.report("완료", true)
+			}
 		}
 	}()
 
@@ -314,9 +424,18 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage) (res toolRes
 	if !ok {
 		return textResult("알 수 없는 도구: "+truncateRunes(p.Name, 64), true)
 	}
+	if tok, has := p.Meta["progressToken"]; has && env.notify != nil && len(tok) > 0 && string(tok) != "null" {
+		cc.progress = newProgressReporter(tok, env.notify)
+		cc.progress.report(tool.Name+" 시작", false)
+	}
 
-	// 키 선택: 요청별 키가 있으면 그것만, 없으면 기본 키.
-	if rawKeys, has := p.Meta[metaKeysField]; has {
+	// 키 선택: 요청별 키(_meta 또는 X-Api-Keys 머리글)가 있으면 그것만, 없으면 기본 키.
+	rawKeys, has := p.Meta[metaKeysField]
+	if !has && env.hasHeaderKeys {
+		has = true
+		rawKeys, _ = json.Marshal(env.headerKeys)
+	}
+	if has {
 		var items []string
 		if err := json.Unmarshal(rawKeys, &items); err != nil {
 			return textResult(`_meta["kr.pes/keys"] 는 문자열 배열이어야 해요`, true)
@@ -388,6 +507,9 @@ func (s *Server) callAPI(ctx context.Context, cc *callCtx, path string, params m
 			BaseURL:    s.opt.APIBaseURL,
 			HTTPClient: s.http,
 			GetToken: func(ctx context.Context) (string, error) {
+				if !mt.Valid() {
+					cc.report("accessToken 발급 중")
+				}
 				t, err := mt.Token(ctx)
 				cc.addSecret(t)
 				return t, err
@@ -406,13 +528,19 @@ func (s *Server) callAPI(ctx context.Context, cc *callCtx, path string, params m
 		switch classify(err) {
 		case errRateLimit:
 			cc.pool.markCooldown(i, rateLimitCooldown)
+			cc.report("호출 한도에 걸려 다음 키로 넘어가요")
 			continue
 		case errAuth:
 			mt.Invalidate()
 			cc.pool.markCooldown(i, authCooldown)
+			cc.report("인증 실패로 다음 키로 넘어가요")
 			continue
 		}
 		return nil, err
+	}
+	if classify(lastErr) == errAuth {
+		// CLI 용 설정 안내(sgis config ...)는 MCP 에 맞지 않아 첫 줄만 남김
+		lastErr = errors.New(strings.SplitN(lastErr.Error(), "\n", 2)[0] + " — 키(consumer_key:consumer_secret)를 확인하세요")
 	}
 	if len(order) > 1 {
 		return nil, fmt.Errorf("모든 키(%d개)가 실패했어요. 마지막 오류: %w", len(order), lastErr)

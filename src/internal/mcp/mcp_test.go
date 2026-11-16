@@ -31,10 +31,13 @@ type fakeSGIS struct {
 	apiTokens []string
 	apiCalls  int
 	srv       *httptest.Server
+	// cancelled는 cd=48(끝없이 느린 요청)이 클라이언트 취소로 끊겼을 때 신호를 받습니다.
+	cancelled chan struct{}
+	started   chan struct{}
 }
 
 func newFakeSGIS(t *testing.T) *fakeSGIS {
-	f := &fakeSGIS{}
+	f := &fakeSGIS{cancelled: make(chan struct{}, 4), started: make(chan struct{}, 4)}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		q := r.URL.Query()
@@ -57,6 +60,15 @@ func newFakeSGIS(t *testing.T) *fakeSGIS {
 			f.apiTokens = append(f.apiTokens, tok)
 			f.apiCalls++
 			f.mu.Unlock()
+			if q.Get("cd") == "48" {
+				f.started <- struct{}{}
+				select {
+				case <-r.Context().Done():
+					f.cancelled <- struct{}{}
+				case <-time.After(5 * time.Second):
+				}
+				return
+			}
 			if q.Get("cd") == "11" {
 				time.Sleep(400 * time.Millisecond) // 느린 요청
 			}
