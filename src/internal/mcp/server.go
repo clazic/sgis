@@ -57,11 +57,13 @@ type Server struct {
 	opt         Options
 	defaultPool *keyPool
 	http        *http.Client
-	logger      *log.Logger
-	tools       []*Tool
-	toolByName  map[string]*Tool
-	results     *ResultStore
-	pageBytes   int
+	// authHTTP는 accessToken 발급용 클라이언트입니다(요청별 키 사용량을 세는 전송 계층 포함).
+	authHTTP   *http.Client
+	logger     *log.Logger
+	tools      []*Tool
+	toolByName map[string]*Tool
+	results    *ResultStore
+	pageBytes  int
 
 	tokMu  sync.Mutex
 	tokens map[string]*auth.MemoryToken
@@ -89,6 +91,12 @@ func NewServer(opt Options) *Server {
 	if s.http == nil {
 		s.http = api.NewHTTPClient()
 	}
+	// 요청별 키 사용량(kr.pes/key-usage)을 세도록 전송 계층을 감쌉니다.
+	// 받은 클라이언트는 바꾸지 않고 복사본을 씁니다. 집계 대상이 아닌 요청은 그대로 지나갑니다.
+	hc := *s.http
+	hc.Transport = wrapUsageTransport(hc.Transport)
+	s.http = &hc
+	s.authHTTP = &http.Client{Timeout: 15 * time.Second, Transport: wrapUsageTransport(nil)}
 	if s.logger == nil {
 		s.logger = log.Default()
 	}
@@ -382,6 +390,8 @@ func (s *Server) toolDescriptors() []map[string]interface{} {
 type toolResult struct {
 	Content []map[string]interface{} `json:"content"`
 	IsError bool                     `json:"isError,omitempty"`
+	// Meta는 결과 _meta 입니다(요청별 키 사용량 kr.pes/key-usage 등). 비면 내보내지 않습니다.
+	Meta map[string]interface{} `json:"_meta,omitempty"`
 }
 
 func textResult(text string, isErr bool) toolResult {
@@ -390,7 +400,9 @@ func textResult(text string, isErr bool) toolResult {
 
 // callCtx는 tools/call 한 번의 상태입니다(쓰인 키·토큰 = 스크럽 대상).
 type callCtx struct {
-	pool     *keyPool
+	pool *keyPool
+	// usage는 요청별 키(_meta · X-Api-Keys)로 처리할 때만 있습니다. 기본 키면 nil(세지 않음).
+	usage    *keyUsage
 	mu       sync.Mutex
 	secrets  []string
 	progress *progressReporter
@@ -443,6 +455,14 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 			if t, ok := res.Content[i]["text"].(string); ok {
 				res.Content[i]["text"] = Scrub(t, cc.secretList())
 			}
+		}
+		// 요청별 키로 SGIS 를 한 번이라도 불렀으면 키 번호별 사용량을 붙입니다(성공 · 오류 결과 모두).
+		// 번호와 횟수만 담고 키 값은 넣지 않습니다. 이미 있는 _meta 와 합칩니다.
+		if us := cc.usage.entries(); len(us) > 0 {
+			if res.Meta == nil {
+				res.Meta = map[string]interface{}{}
+			}
+			res.Meta[metaKeyUsageField] = us
 		}
 		if cc.progress != nil && ctx.Err() == nil {
 			if res.IsError {
@@ -500,6 +520,7 @@ func (s *Server) callTool(ctx context.Context, raw json.RawMessage, env *callEnv
 			return textResult(`_meta["kr.pes/keys"] 오류: `+err.Error(), true)
 		}
 		cc.pool = newKeyPool(creds)
+		cc.usage = newKeyUsage() // 풀 번호 = 받은 목록 번호(ParseCredList 가 순서를 지킴)
 	} else {
 		if len(s.opt.DefaultKeys) == 0 {
 			return textResult("API 키가 없어요: SGIS_API_KEYS 환경변수(consumer_key:consumer_secret, 쉼표로 여러 개)나 _meta[\"kr.pes/keys\"] 로 키를 넣어 주세요", true)
@@ -542,6 +563,7 @@ func (s *Server) tokenFor(c Cred) *auth.MemoryToken {
 	}
 	mt := auth.NewMemoryToken(c.Key, c.Secret)
 	mt.AuthURL = s.opt.AuthURL
+	mt.HTTPClient = s.authHTTP
 	s.tokens[id] = mt
 	return mt
 }
@@ -569,7 +591,8 @@ func (s *Server) callAPI(ctx context.Context, cc *callCtx, path string, params m
 			},
 			OnTokenExpired: mt.Invalidate,
 		})
-		res, err := client.Get(ctx, path, params)
+		// 이 키로 나가는 인증 · 자료 요청을 키 번호 i 로 셉니다(요청별 키일 때만).
+		res, err := client.Get(withUsage(ctx, cc.usage, i), path, params)
 		if err == nil {
 			cc.pool.markOK(i)
 			// 저장·응답 전에 원본에서도 키·토큰을 지움(결과 파일에 비밀이 들어가지 않게)

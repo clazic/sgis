@@ -222,6 +222,10 @@ sgis-mcp --version
 | (fallback) | `SGIS_API_KEYS` 가 없으면 `sgis` CLI 설정(`SGIS_CONSUMER_KEY`/`SGIS_CONSUMER_SECRET` → `~/.sgis/config.yaml`) 1개 |
 
 - **요청별 키**: `tools/call` 의 `params._meta["kr.pes/keys"]` = `["consumer_key:consumer_secret", ...]`. 있으면 **그 키만** 쓰고 기본 키로 넘어가지 않습니다. 둘 다 없으면 `isError: true` 로 "API 키가 없어요".
+- **키별 사용량**: 요청별 키(`_meta["kr.pes/keys"]` · HTTP `X-Api-Keys`)로 처리한 `tools/call` 은 결과(`content` · `isError` 옆)에 `"_meta": {"kr.pes/key-usage": [{"i": 0, "calls": 3, "errors": 0, "limited": 1}, ...]}` 를 붙입니다.
+  - `i` = 받은 키 목록에서의 번호(0부터), `calls` = 이 호출 동안 그 키로 SGIS 에 보낸 HTTP 요청 수(accessToken 발급 요청 + 그 토큰으로 보낸 자료 요청, 429 재시도 포함), `errors` = 그중 실패(전송 오류 · HTTP 400 이상 · `errCd` != 0), `limited` = 그중 HTTP 429(`errors` 에 포함).
+  - 요청을 보낸 키만 담습니다. SGIS 를 한 번도 부르지 않았으면(입력 오류, `sgis_result_page` 로 저장된 결과 넘기기 등) 칸 자체가 없습니다. 토큰이 캐시에 있으면 발급 요청은 세지 않습니다.
+  - 성공 · `isError: true` 결과 모두에 붙고, stdio · HTTP(JSON · SSE) 가 같습니다. 번호와 횟수만 담으며 키 값은 넣지 않습니다. 기본 키(환경변수 · 설정)로 처리한 요청에는 붙지 않습니다.
 - accessToken 은 **키 쌍별 메모리 캐시**에만 두고(4시간, 만료 24분 전 재발급) 다른 키 요청에 쓰지 않습니다. MCP 서버는 `~/.sgis/token.json` 을 읽거나 쓰지 않고, 응답 파일 캐시도 두지 않습니다.
 - 키·시크릿·accessToken 은 argv·로그·결과·오류 어디에도 원문으로 나오지 않습니다(응답 직전 `***<끝4자리>` 로 스크럽, URL 인코딩 형태 포함).
 
@@ -263,7 +267,7 @@ SGIS_MCP_TOKEN=$(openssl rand -hex 32) sgis-mcp --http 0.0.0.0:9100   # loopback
   - 세션: `initialize` 응답 머리글 `Mcp-Session-Id`(256bit 무작위). 이후 요청은 그 머리글 필수(없으면 400, 모르는/만료 세션 404). `DELETE /mcp` 로 끝, 1시간 미사용 시 버림.
   - `GET /mcp`(세션 머리글 + `Accept: text/event-stream`): 서버 먼저 알림용 SSE, 보낼 게 없으면 15초마다 `: ping`.
   - `MCP-Protocol-Version` 머리글이 모르는 값이면 400. 본문 1MB 상한(413).
-- 요청별 키: 머리글 `X-Api-Keys: key1:secret1,key2:secret2` → 그 POST 의 모든 `tools/call` 에 `_meta["kr.pes/keys"]` 와 똑같이 적용(기본 키로 안 넘어감). 둘 다 있으면 `_meta` 우선.
+- 요청별 키: 머리글 `X-Api-Keys: key1:secret1,key2:secret2` → 그 POST 의 모든 `tools/call` 에 `_meta["kr.pes/keys"]` 와 똑같이 적용(기본 키로 안 넘어감). 둘 다 있으면 `_meta` 우선. 키별 사용량(`_meta["kr.pes/key-usage"]`)의 `i` 는 실제로 쓰인 쪽 목록의 번호입니다.
 - HTTP 응답·SSE 이벤트 전부 키·시크릿·토큰 스크럽. 접근 기록(stderr)은 메서드·도구 이름·걸린 시간만.
 
 Claude Code (HTTP):

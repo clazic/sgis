@@ -3,6 +3,7 @@
 // 기본 키: SGIS_API_KEYS (쉼표 구분, 각 항목 consumer_key:consumer_secret).
 // 없으면 sgis CLI 설정(SGIS_CONSUMER_KEY/SECRET 환경변수 → ~/.sgis/config.yaml)을 씁니다.
 // 요청별 키: tools/call params._meta["kr.pes/keys"] (같은 형식의 문자열 배열).
+// 요청별 키로 처리한 결과에는 _meta["kr.pes/key-usage"] (키 번호별 호출 · 오류 · 429 횟수)가 붙습니다.
 package main
 
 import (
@@ -41,6 +42,8 @@ const usage = `sgis-mcp — SGIS 통계지리정보서비스 stdio MCP 서버 (�
 요청별 키:
   tools/call 의 params._meta["kr.pes/keys"] = ["key:secret", ...] (있으면 그 키만 씀)
   HTTP 모드에서는 머리글 X-Api-Keys: key:secret,key2:secret2 도 같음
+  요청별 키로 SGIS 를 불렀으면 결과 _meta["kr.pes/key-usage"] 에 키 번호별 사용량을 붙임
+    [{"i":0,"calls":3,"errors":0,"limited":1}]  (i=목록 번호, limited=429, 키 값은 안 담음)
 `
 
 func main() {

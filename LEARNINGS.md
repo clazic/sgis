@@ -32,6 +32,7 @@
 | 2026-06-21 | `auth/authentication.json` | `accessTimeout` 필드를 `int64`로 파싱하면 `"cannot unmarshal string into Go struct field"` 오류 | 응답이 `"1782022524954"` 형태의 **JSON 문자열**로 옴 (숫자 아님) | `string`으로 수신 후 `strconv.ParseInt` 변환. auth.go의 struct 태그 주의 |
 | 2026-06-21 | `addr/stage.json` | 미지정(`cd` 없음) 시 시도 17개 반환. `cd=11` 시 서울 구 25개 반환 | 단계별 조회 구조 — cd 자릿수에 따라 반환 단계가 달라짐 | 시도=cd 없음, 시군구=2자리, 읍면동=5자리 |
 | 2026-06-21 | `boundary/hadmarea.geojson` | Leaflet 지도에서 경계가 엉뚱한 위치(보통 아프리카 해상)에 표시됨 | 좌표가 UTM-K(x≈953932, y≈1952053) — Leaflet은 WGS84(lon, lat) 기대 | `transcoord` API로 EPSG:5179→4326 재투영 후 사용하거나, 지도 라이브러리에 proj4 추가 |
+| 2026-11-21 | `sgis-mcp` 키별 사용량(`_meta["kr.pes/key-usage"]`) | 키별 HTTP 요청 수를 `callAPI` 에서 세면 인증 요청 · 429 재시도(1·2·4초, 4번)가 빠짐 | 재시도는 `api.Client` 안, 발급은 키별로 공유하는 `auth.MemoryToken` 안에서 일어남 | 전송 계층(`mcp/usage.go` usageTransport)에서 센다 — `callAPI` 가 context 에 (집계기, 키 번호)를 달면 인증 · 자료 요청이 같은 context 로 나감. `errCd` 는 본문 앞 64KB 안에서만 확인(오류 봉투는 작음) |
 
 ---
 
