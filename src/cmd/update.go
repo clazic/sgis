@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/clazic/sgis/internal/config"
+	"github.com/clazic/sgis/internal/relay"
 	"github.com/spf13/cobra"
 )
 
@@ -307,6 +308,10 @@ func saveUpdateCache(latestKnown string) error {
 func shouldCheckUpdate() bool {
 	// 명시적 비활성화 (env)
 	if os.Getenv("SGIS_NO_UPDATE_CHECK") != "" {
+		return false
+	}
+	// PES 중계 모드에서는 업데이트 확인 알림을 끕니다.
+	if relay.Enabled() {
 		return false
 	}
 	if cfg, err := config.Load(); err == nil && !cfg.UpdateCheck {

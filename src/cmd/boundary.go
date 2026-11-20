@@ -63,8 +63,8 @@ WGS84(EPSG:4326)로 재투영하세요. 기본 출력 형식은 geojson입니다
 // makeBoundaryRunE is like makeRunE but defaults to "geojson" format instead of "table".
 func makeBoundaryRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		if !config.HasCredentials() {
-			fmt.Fprint(os.Stderr, config.NoCredentialMessage())
+		if msg := credentialProblem(); msg != "" {
+			fmt.Fprint(os.Stderr, msg)
 			os.Exit(1)
 		}
 
@@ -106,10 +106,12 @@ func makeBoundaryRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) 
 
 		client, err := api.NewClient()
 		if err != nil {
+			exitOnRelayError(err)
 			return fmt.Errorf("API 클라이언트 초기화 실패: %w", err)
 		}
 		result, err := client.Call(context.Background(), ep, params)
 		if err != nil {
+			exitOnRelayError(err)
 			return fmt.Errorf("API 호출 실패: %w", err)
 		}
 

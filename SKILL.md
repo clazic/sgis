@@ -24,6 +24,8 @@ SGIS 명령 실행 전 반드시 다음 순서를 따를 것:
    - macOS/Linux: `curl -fsSL https://raw.githubusercontent.com/clazic/sgis/master/scripts/install.sh | sh`
    - Windows: `irm https://raw.githubusercontent.com/clazic/sgis/master/scripts/install.ps1 | iex`
 
+> **PES 중계 모드**: 환경변수 `PES_RELAY_URL` 이 있으면(PES 브리지가 실행한 경우) 키는 PES에 있습니다. 아래 1~3단계(자격증명 확인 · 등록)를 건너뛰고 바로 명령을 실행하세요. `PES 에 SGIS 키가 없어요…` 가 나오면 `sgis config set-credential` 을 하지 말고 그 글을 그대로 사용자에게 전하세요.
+
 1. `sgis config get` 실행 → 자격증명 존재 여부 확인
 
 2. `consumer_key` / `consumer_secret`이 없고 환경변수 `SGIS_CONSUMER_KEY` / `SGIS_CONSUMER_SECRET`도 없으면 → **실행 중단 후 안내:**
@@ -118,7 +120,8 @@ make build      # 5개 플랫폼 빌드 후 src/bin/ 과 apps/ 두 곳에 자동
 | 응답 캐시 | `~/.sgis/cache/` | 메타/코드 응답만, TTL 설정 가능 |
 
 > Windows: `~` → `%USERPROFILE%`, 한글 깨짐 시 `chcp 65001`  
-> 환경변수 `SGIS_CONSUMER_KEY` / `SGIS_CONSUMER_SECRET` 설정 시 config.yaml보다 우선 적용
+> 환경변수 `SGIS_CONSUMER_KEY` / `SGIS_CONSUMER_SECRET` 설정 시 config.yaml보다 우선 적용  
+> PES 중계 모드(`PES_RELAY_URL` · `PES_RELAY_TOKEN` · `PES_RELAY_SGIS_KEYS`)에서는 위 키를 모두 무시하고 중계를 거칩니다. 토큰 캐시는 `~/.sgis/token.relay.<i>.json` 에 따로 둡니다.
 
 ---
 

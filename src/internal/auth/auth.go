@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/clazic/sgis/internal/config"
+	"github.com/clazic/sgis/internal/relay"
 )
 
 // 센티넬 에러: 호출자가 에러 종류에 따라 분기할 수 있도록 노출합니다.
@@ -89,7 +90,12 @@ func needsRefresh(tc *tokenCache) bool {
 // loadTokenCache는 token.json을 읽어 tokenCache를 반환합니다.
 // 파일이 없거나 파싱 실패 시 nil을 반환합니다 (에러 없음 — 재발급으로 진행).
 func loadTokenCache() *tokenCache {
-	data, err := os.ReadFile(tokenPath())
+	return loadTokenCacheAt(tokenPath())
+}
+
+// loadTokenCacheAt은 loadTokenCache와 같지만 캐시 파일 경로를 직접 받습니다.
+func loadTokenCacheAt(path string) *tokenCache {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
@@ -103,6 +109,11 @@ func loadTokenCache() *tokenCache {
 // saveTokenCache는 tokenCache를 token.json에 원자적으로 저장합니다 (0o600).
 // 쓰기 순서: .tmp 파일 생성 → rename (원자 교체).
 func saveTokenCache(tc *tokenCache) error {
+	return saveTokenCacheAt(tokenPath(), tc)
+}
+
+// saveTokenCacheAt은 saveTokenCache와 같지만 캐시 파일 경로를 직접 받습니다.
+func saveTokenCacheAt(tp string, tc *tokenCache) error {
 	if err := config.EnsureConfigDir(); err != nil {
 		return err
 	}
@@ -110,7 +121,6 @@ func saveTokenCache(tc *tokenCache) error {
 	if err != nil {
 		return fmt.Errorf("token 직렬화 실패: %w", err)
 	}
-	tp := tokenPath()
 	tmp := tp + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("token 임시 파일 쓰기 실패: %w", err)
@@ -141,6 +151,10 @@ func issueTokenAt(ctx context.Context, client *http.Client, endpoint, consumerKe
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// 중계가 스스로 낸 오류는 그 글 그대로 돌려줍니다(네트워크 오류로 감싸지 않음).
+		if re, ok := relay.AsError(err); ok {
+			return nil, re
+		}
 		return nil, fmt.Errorf("%w: %v", ErrNetwork, err)
 	}
 	defer resp.Body.Close()
@@ -152,6 +166,10 @@ func issueTokenAt(ctx context.Context, client *http.Client, endpoint, consumerKe
 
 	// errCd != 0: SGIS가 명시적으로 거부한 경우 (잘못된 key/secret 등)
 	if ar.ErrCd != 0 {
+		if relay.Enabled() {
+			// 중계 모드: 키는 PES에 있으므로 CLI 설정 안내(sgis config ...)를 붙이지 않습니다.
+			return nil, fmt.Errorf("%w (errCd=%d, errMsg=%s)", ErrInvalidCredential, ar.ErrCd, ar.ErrMsg)
+		}
 		return nil, fmt.Errorf("%w (errCd=%d, errMsg=%s)\n%s",
 			ErrInvalidCredential, ar.ErrCd, ar.ErrMsg, config.NoCredentialMessage())
 	}
@@ -178,27 +196,51 @@ func issueTokenAt(ctx context.Context, client *http.Client, endpoint, consumerKe
 	return tc, nil
 }
 
+// credSource는 토큰을 발급·캐시할 키 쌍 하나와 그 캐시 자리입니다.
+type credSource struct {
+	key, secret string
+	fingerprint string // 캐시가 이 키 쌍의 것인지 확인하는 지문
+	tokenPath   string // 토큰 캐시 파일
+	lockPath    string // advisory lock 파일
+	client      *http.Client
+}
+
 // GetToken은 유효한 accessToken을 반환합니다.
 // 캐시가 유효하면 재사용하고, 만료/credential 변경 시 재발급합니다.
 // 동시 호출은 advisory 파일 락(token.lock)으로 직렬화됩니다.
+//
+// PES 중계 모드에서는 첫 번째 자리표시 쌍으로 GetRelayToken(ctx, 0)과 같이 동작합니다.
 func GetToken(ctx context.Context) (string, error) {
+	if relay.Enabled() {
+		return GetRelayToken(ctx, 0)
+	}
 	consumerKey, consumerSecret, err := config.GetCredentials()
 	if err != nil {
 		return "", err
 	}
-	fp := credFingerprint(consumerKey)
-	client := &http.Client{Timeout: 15 * time.Second}
+	return getTokenFrom(ctx, credSource{
+		key:         consumerKey,
+		secret:      consumerSecret,
+		fingerprint: credFingerprint(consumerKey),
+		tokenPath:   tokenPath(),
+		lockPath:    lockPath(),
+		client:      &http.Client{Timeout: 15 * time.Second},
+	})
+}
+
+// getTokenFrom은 src의 캐시를 확인하고, 없거나 만료 임계에 닿았으면 락을 잡고 재발급합니다.
+func getTokenFrom(ctx context.Context, src credSource) (string, error) {
+	fp := src.fingerprint
 
 	// 락 전 빠른 캐시 확인 (락 없이 read-only)
-	if tc := loadTokenCache(); tc != nil {
+	if tc := loadTokenCacheAt(src.tokenPath); tc != nil {
 		if tc.CredFingerprint == fp && !needsRefresh(tc) {
 			return tc.AccessToken, nil
 		}
 	}
 
 	// advisory 파일 락 획득 (토큰 발급 임계 영역 직렬화)
-	lp := lockPath()
-	lockFile, lockErr := os.OpenFile(lp, os.O_CREATE|os.O_RDWR, 0o600)
+	lockFile, lockErr := os.OpenFile(src.lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if lockErr != nil {
 		log.Printf("advisory lock 파일 열기 실패: %v; lock-free로 진행합니다", lockErr)
 	}
@@ -220,20 +262,21 @@ func GetToken(ctx context.Context) (string, error) {
 	}()
 
 	// 락 획득 후 double-check: 다른 프로세스가 이미 발급했을 수 있음
-	if tc := loadTokenCache(); tc != nil {
+	if tc := loadTokenCacheAt(src.tokenPath); tc != nil {
 		if tc.CredFingerprint == fp && !needsRefresh(tc) {
 			return tc.AccessToken, nil
 		}
 	}
 
 	// 실제 발급
-	tc, err := issueToken(ctx, client, consumerKey, consumerSecret)
+	tc, err := issueToken(ctx, src.client, src.key, src.secret)
 	if err != nil {
 		return "", err
 	}
+	tc.CredFingerprint = fp
 
 	// atomic write (락 보유 상태에서)
-	if err := saveTokenCache(tc); err != nil {
+	if err := saveTokenCacheAt(src.tokenPath, tc); err != nil {
 		// 저장 실패해도 이번 호출은 성공으로 처리 (토큰은 유효함)
 		log.Printf("token 캐시 저장 실패: %v", err)
 	}

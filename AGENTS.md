@@ -79,6 +79,7 @@ sgis/
 │   ├── internal/
 │   │   ├── auth/           # accessToken 발급·캐싱·파일락 [신규, kosis 대응 없음]
 │   │   ├── mcp/            # sgis-mcp 프로토콜·도구·키 풀·스크럽 (토큰은 키별 메모리 캐시)
+│   │   ├── relay/          # PES 중계 모드 (PES_RELAY_URL — 주소 바꾸기·자리표시·중계 오류, CLI 전용)
 │   │   ├── api/            # HTTP 클라이언트 + 정적 엔드포인트 레지스트리
 │   │   ├── config/         # ~/.sgis/config.yaml 관리
 │   │   ├── cache/          # 메타/코드 응답 파일 캐시

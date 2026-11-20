@@ -139,8 +139,8 @@ func buildLongDesc(ep *api.Endpoint) string {
 func makeRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) error {
 	return func(cmd *cobra.Command, args []string) error {
 		// Credential check
-		if !config.HasCredentials() {
-			fmt.Fprint(os.Stderr, config.NoCredentialMessage())
+		if msg := credentialProblem(); msg != "" {
+			fmt.Fprint(os.Stderr, msg)
 			os.Exit(1)
 		}
 
@@ -187,10 +187,12 @@ func makeRunE(ep *api.Endpoint) func(cmd *cobra.Command, args []string) error {
 		// Call API
 		client, err := api.NewClient()
 		if err != nil {
+			exitOnRelayError(err)
 			return fmt.Errorf("API 클라이언트 초기화 실패: %w", err)
 		}
 		result, err := client.Call(context.Background(), ep, params)
 		if err != nil {
+			exitOnRelayError(err)
 			return fmt.Errorf("API 호출 실패: %w", err)
 		}
 

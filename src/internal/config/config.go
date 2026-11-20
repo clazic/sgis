@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/clazic/sgis/internal/relay"
 	"github.com/spf13/viper"
 )
 
@@ -90,7 +91,17 @@ func Load() (*Config, error) {
 
 // GetCredentials는 ConsumerKey와 ConsumerSecret을 반환합니다.
 // 어느 하나라도 없으면 에러를 반환합니다.
+//
+// PES 중계 모드(PES_RELAY_URL)에서는 설정 파일·SGIS_CONSUMER_* 환경변수를 쓰지 않고
+// 첫 번째 쌍의 자리표시를 돌려줍니다. PES에 키가 없으면 relay.ErrNoKeys 입니다.
 func GetCredentials() (key, secret string, err error) {
+	if relay.Enabled() {
+		if relay.KeyCount() == 0 {
+			return "", "", relay.ErrNoKeys
+		}
+		key, secret = relay.Placeholder(0)
+		return key, secret, nil
+	}
 	cfg, err := Load()
 	if err != nil {
 		return "", "", err
@@ -145,7 +156,11 @@ func SetCredentials(key, secret string) error {
 }
 
 // HasCredentials는 서비스 ID와 보안 Key가 모두 설정되어 있는지 확인합니다.
+// PES 중계 모드에서는 PES에 등록된 키 쌍이 하나라도 있는지로 판단합니다.
 func HasCredentials() bool {
+	if relay.Enabled() {
+		return relay.KeyCount() > 0
+	}
 	if os.Getenv("SGIS_CONSUMER_KEY") != "" && os.Getenv("SGIS_CONSUMER_SECRET") != "" {
 		return true
 	}

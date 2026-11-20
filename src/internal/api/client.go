@@ -3,13 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/clazic/sgis/internal/auth"
+	"github.com/clazic/sgis/internal/relay"
 )
 
 const (
@@ -42,6 +45,8 @@ type Client struct {
 	getToken   tokenProvider
 	// onTokenExpired는 토큰 만료 errCd를 받았을 때 재발급 전에 호출됩니다(선택).
 	onTokenExpired func()
+	// relayPairs > 0 이면 PES 중계 모드입니다. 자리표시 쌍 relayPairs개를 풀로 씁니다.
+	relayPairs int
 }
 
 // ClientOptions는 NewClientWithOptions 설정입니다. CLI는 NewClient를 그대로 씁니다.
@@ -89,8 +94,11 @@ func NewClientWithOptions(o ClientOptions) *Client {
 
 // NewClient는 기본 설정으로 SGIS API 클라이언트를 생성합니다.
 // 인증은 internal/auth.GetToken 을 통해 자동으로 처리됩니다.
+//
+// PES 중계 모드(PES_RELAY_URL)에서는 모든 요청을 중계로 보내고, 설정 파일의 키 대신
+// 자리표시 쌍을 씁니다. PES에 키가 없으면 SGIS를 부르지 않고 relay.ErrNoKeys 를 돌려줍니다.
 func NewClient() (*Client, error) {
-	return &Client{
+	c := &Client{
 		baseURL:  apiBaseURL,
 		getToken: auth.GetToken,
 		httpClient: &http.Client{
@@ -102,8 +110,82 @@ func NewClient() (*Client, error) {
 				ForceAttemptHTTP2:   true,
 			},
 		},
-	}, nil
+	}
+	if relay.Enabled() {
+		n := relay.KeyCount()
+		if n == 0 {
+			return nil, relay.ErrNoKeys
+		}
+		c.relayPairs = n
+		c.httpClient.Transport = relay.Wrap(c.httpClient.Transport)
+	}
+	return c, nil
 }
+
+// relayStart는 중계 모드 키 풀에서 이번 실행이 먼저 쓸 쌍 번호를 고릅니다.
+// CLI는 한 번 돌고 끝나므로, 여러 실행이 쌍을 고르게 나눠 쓰도록 무작위로 시작합니다.
+// 테스트에서 바꿀 수 있습니다.
+var relayStart = func(n int) int { return rand.Intn(n) }
+
+// getViaRelayPool은 중계 모드에서 자리표시 쌍을 차례로 써서 호출합니다.
+// 429(재시도 소진)·인증 거부면 다음 쌍으로 넘어갑니다. 중계가 스스로 낸 오류는
+// 다른 쌍으로 다시 해 보지 않고 바로 돌려줍니다.
+func (c *Client) getViaRelayPool(ctx context.Context, path string, params map[string]string) (json.RawMessage, error) {
+	n := c.relayPairs
+	start := 0
+	if n > 1 {
+		start = relayStart(n) % n
+	}
+	var lastErr error
+	for k := 0; k < n; k++ {
+		i := (start + k) % n
+		sub := *c
+		sub.relayPairs = 0
+		sub.getToken = func(ctx context.Context) (string, error) { return auth.GetRelayToken(ctx, i) }
+		sub.onTokenExpired = func() { auth.InvalidateRelayToken(i) }
+
+		res, err := sub.Get(ctx, path, params)
+		if err == nil {
+			return res, nil
+		}
+		if relay.IsFatal(err) {
+			return nil, relayCause(err)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		lastErr = err
+		if !isKeyFailure(err) {
+			return nil, err
+		}
+	}
+	if n > 1 {
+		return nil, fmt.Errorf("모든 키(%d개)가 실패했어요. 마지막 오류: %w", n, lastErr)
+	}
+	return nil, lastErr
+}
+
+// relayCause는 err 사슬에서 중계 오류만 꺼냅니다(주소가 붙은 *url.Error 겉을 벗김).
+func relayCause(err error) error {
+	if re, ok := relay.AsError(err); ok {
+		return re
+	}
+	if errors.Is(err, relay.ErrNoKeys) {
+		return relay.ErrNoKeys
+	}
+	return err
+}
+
+// isKeyFailure는 다른 키로 바꾸면 풀릴 수 있는 오류(호출 한도 · 인증 거부)인지 알려 줍니다.
+func isKeyFailure(err error) bool {
+	if errors.Is(err, auth.ErrInvalidCredential) || errors.Is(err, errRateLimited) {
+		return true
+	}
+	return strings.Contains(err.Error(), "errCd=-401")
+}
+
+// errRateLimited는 429 재시도를 모두 쓰고도 실패한 경우입니다.
+var errRateLimited = errors.New("SGIS API 429 Too Many Requests")
 
 // maskToken은 에러 문자열에 포함된 토큰을 마스킹합니다.
 func maskToken(s, token string) string {
@@ -121,6 +203,9 @@ func maskToken(s, token string) string {
 // 429 응답은 exponential backoff(1s/2s/4s, 최대 3회)로 재시도합니다.
 // 토큰 만료(errCd 지시)가 감지되면 1회 강제 재발급 후 재시도합니다.
 func (c *Client) Get(ctx context.Context, path string, params map[string]string) (json.RawMessage, error) {
+	if c.relayPairs > 0 {
+		return c.getViaRelayPool(ctx, path, params)
+	}
 	token, err := c.getToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("accessToken 획득 실패: %w", err)
@@ -175,7 +260,7 @@ func (c *Client) doGet(ctx context.Context, path string, params map[string]strin
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			resp.Body.Close()
-			lastErr = fmt.Errorf("SGIS API 429 Too Many Requests (재시도 %d/%d)", attempt+1, maxRetries)
+			lastErr = fmt.Errorf("%w (재시도 %d/%d)", errRateLimited, attempt+1, maxRetries)
 			continue
 		}
 

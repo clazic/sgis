@@ -112,6 +112,22 @@ export SGIS_CONSUMER_SECRET="<SECRET>"
 sgis data population --adm-cd 11 --year 2020
 ```
 
+### PES 중계 모드
+
+`PES_RELAY_URL` 이 있으면 위 우선순위를 쓰지 않습니다(환경변수 · config.yaml 모두 무시).
+
+```
+PES_RELAY_URL        중계 주소 (있으면 중계 모드)
+PES_RELAY_TOKEN      실행 토큰 → X-PES-Relay-Token 머리글
+PES_RELAY_SGIS_KEYS  PES에 등록된 쌍 수 n (0 · 없음 → 안내 후 종료 코드 1, 호출 없음)
+```
+
+- 인증 흐름은 같습니다. `consumer_key=__PES_KEY_i__&consumer_secret=__PES_SECRET_i__` 로 인증 엔드포인트를 중계에 요청하면, 중계가 실제 쌍으로 바꿔 SGIS에 보내고 보통의 `accessToken` 을 돌려줍니다.
+- 모든 SGIS 요청 주소: `{PES_RELAY_URL}/sgis/https/sgisapi.mods.go.kr/OpenAPI3/...` (`internal/relay` 의 `http.RoundTripper` 한 곳에서 바꿈. 3xx 의 `Location` 이 기관 주소면 다시 중계 주소로 요청)
+- 토큰 캐시: `~/.sgis/token.relay.<i>.json` (쌍마다, 지문 = 중계 주소 + 실행 토큰 + 자리표시). 사용자 자신의 `token.json` 은 읽지도 쓰지도 않습니다.
+- n > 1 이면 무작위 쌍부터 시작해 429(재시도 소진) · 인증 거부 때 다음 쌍으로 넘어갑니다.
+- 응답 머리글 `X-PES-Relay-Error: 1` (401 · 403 · 409)은 중계가 낸 오류 — `error` 글을 그대로 보여 주고 끝냅니다(다른 쌍으로 다시 하지 않음).
+
 ---
 
 ## 에러 구분

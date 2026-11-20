@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/clazic/sgis/internal/config"
+	"github.com/clazic/sgis/internal/relay"
 	"github.com/spf13/cobra"
 )
 
@@ -65,6 +66,15 @@ default_format(기본 출력 형식), update_check(자동 업데이트 확인 �
 		fmt.Fprintf(out, "default_format:  %s\n", cfg.DefaultFormat)
 		fmt.Fprintf(out, "update_check:    %v\n", cfg.UpdateCheck)
 
+		if relay.Enabled() {
+			// 중계 모드: 위 설정 파일의 키는 쓰지 않고 PES에 등록된 키를 중계로 씁니다.
+			fmt.Fprintln(out, "")
+			fmt.Fprintf(out, "PES 중계 모드: 설정 파일의 키를 쓰지 않습니다 (PES 등록 키 %d쌍).\n", relay.KeyCount())
+			if relay.KeyCount() == 0 {
+				fmt.Fprintln(out, relay.NoKeyMessage)
+			}
+			return nil
+		}
 		if !config.HasCredentials() {
 			fmt.Fprintln(out, "")
 			fmt.Fprintln(out, config.NoCredentialMessage())
