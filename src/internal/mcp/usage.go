@@ -85,7 +85,7 @@ func withUsage(ctx context.Context, u *keyUsage, i int) context.Context {
 // usageTransport는 요청 context 에 usageSlot 이 있으면 그 요청을 셉니다.
 //
 //	calls   = 보낸 HTTP 요청
-//	errors  = 전송 오류 · HTTP 400 이상 · SGIS errCd != 0 (요청 하나에 한 번만)
+//	errors  = 전송 오류 · HTTP 400 이상 · SGIS errCd != 0 (요청 하나에 한 번만. errCd -100 「자료 없음」은 빼고)
 //	limited = HTTP 429 (errors 에 포함)
 //
 // slot 이 없는 요청(기본 키)은 손대지 않고 그대로 넘깁니다.
@@ -170,7 +170,8 @@ func (b *usageBody) finish(failed bool) {
 			ErrCd json.Number `json:"errCd"`
 		}
 		if json.Unmarshal(b.head, &env) == nil {
-			if s := env.ErrCd.String(); s != "" && s != "0" {
+			// -100 은 「검색 결과가 존재하지 않습니다」(빈 결과) — 키 · 호출 문제가 아니라 오류로 세지 않는다
+			if s := env.ErrCd.String(); s != "" && s != "0" && s != "-100" {
 				failed = true
 			}
 		}
