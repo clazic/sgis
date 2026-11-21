@@ -40,7 +40,7 @@ func TestPlaceholder(t *testing.T) {
 }
 
 func TestNoKeyMessageExact(t *testing.T) {
-	const want = "PES 에 SGIS 키가 없어요. PES 「조사 도구 · 그림 키」에서 키를 넣으세요."
+	const want = "PES 에 SGIS 키가 없어요. PES 「도구」에서 키를 넣으세요."
 	if NoKeyMessage != want || ErrNoKeys.Error() != want {
 		t.Errorf("안내 글이 규약과 다름: %q", NoKeyMessage)
 	}

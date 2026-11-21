@@ -208,7 +208,7 @@ func TestRelay_RewritesAuthAndDataRequests(t *testing.T) {
 
 // 키 수가 0 이거나 변수가 없으면 중계도 SGIS도 부르지 않고 규약의 안내 글로 끝납니다.
 func TestRelay_NoKeys_NoNetworkCall(t *testing.T) {
-	const want = "PES 에 SGIS 키가 없어요. PES 「조사 도구 · 그림 키」에서 키를 넣으세요."
+	const want = "PES 에 SGIS 키가 없어요. PES 「도구」에서 키를 넣으세요."
 	for _, keys := range []string{"0", "<unset>", "abc"} {
 		f := newFakeRelay(t)
 		setupRelayEnv(t, f.URL, keys)

@@ -31,7 +31,7 @@ func TestCredentialProblem(t *testing.T) {
 	t.Setenv("PES_RELAY_URL", "http://127.0.0.1:1")
 	for _, n := range []string{"", "0"} {
 		t.Setenv("PES_RELAY_SGIS_KEYS", n)
-		want := "PES 에 SGIS 키가 없어요. PES 「조사 도구 · 그림 키」에서 키를 넣으세요.\n"
+		want := "PES 에 SGIS 키가 없어요. PES 「도구」에서 키를 넣으세요.\n"
 		if got := credentialProblem(); got != want {
 			t.Errorf("[%q] 안내 글 불일치: %q", n, got)
 		}

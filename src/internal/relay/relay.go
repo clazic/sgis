@@ -37,7 +37,7 @@ const (
 )
 
 // NoKeyMessage는 PES에 SGIS 키가 없을 때(키 수 0 또는 변수 없음) 보여 주는 안내입니다.
-const NoKeyMessage = "PES 에 SGIS 키가 없어요. PES 「조사 도구 · 그림 키」에서 키를 넣으세요."
+const NoKeyMessage = "PES 에 SGIS 키가 없어요. PES 「도구」에서 키를 넣으세요."
 
 // ErrNoKeys는 중계 모드인데 PES에 등록된 SGIS 키 쌍이 없을 때의 오류입니다.
 // SGIS를 부르지 않고 바로 끝내야 합니다.
